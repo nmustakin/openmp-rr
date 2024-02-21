@@ -512,7 +512,7 @@ class BaseBenchmark(ABC):
         def __init__(self, MaxMem):
             self.envVars = {
                 'OMP_NUM_THREADS' : 2,
-                'LIBOMPTARGET_RR_DEVMEM_SIZE':  MaxMem,
+                'LIBOMPTARGET_RR_DEVMEM_SIZE':  4,
                 'LIBOMPTARGET_RR_SAVE_OUTPUT':  1,
                 'OMP_TARGET_OFFLOAD':           'mandatory',
                 'LIBOMPTARGET_NEXTGEN_PLUGINS': 1,
@@ -622,12 +622,16 @@ class BaseBenchmark(ABC):
             command = self.Device.command().format(executable=command, output=f'{csvFile}.csv')
             env += ' ' + self.Device.env()
 
-        print(env + ' ' + command)
+        #print(env + ' ' + command)
         ret, stdout, stderr = execute_command(env + ' ' + command, capture_output=True, cwd=os.getcwd(), shell=True, check=False)
+        #print("NEW ret: " , ret, "\n")
+        #print("NEW stdout: ", stdout, "\n")
+        #print("NEW stderr: ", stderr, "\nEND\n")
         application_time = self.getApplicationTime(stdout)
 
         if Profile:
             csvFile=self.executable.replace('/', '_')
+            print("Reading csvfile: ", csvFile)
             kernelDescr = self.Device.parse(f'{csvFile}.csv',
                                             keepMaxTeam=True, dropSingleTeams=True)
 

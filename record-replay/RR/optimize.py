@@ -232,7 +232,7 @@ def main():
                     sys.exit()
                 AnalysisKernels = list()
                 if kernel.lower() == 'all':
-                    AnalysisKernels = bench.getKernels().keys()
+                    AnalysisKernels = bench.getKernels('record').keys()
                 else:
                     AnalysisKernels.append(kernel)
 

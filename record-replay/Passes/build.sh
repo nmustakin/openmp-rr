@@ -8,7 +8,7 @@ echo $host
 cd build/${host}
 
 cmake \
-    -DLT_LLVM_INSTALL_DIR=/usr/WS2/koparasy/PARCO/llvm/qmcpack/install/${host}/ \
+    -DLT_LLVM_INSTALL_DIR=/data2/nmn/record-replay/build/ \
     -DCMAKE_C_COMPILER=gcc \
     -DCMAKE_CXX_COMPILER=g++ \
     ../../

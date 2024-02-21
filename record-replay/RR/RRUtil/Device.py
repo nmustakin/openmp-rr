@@ -154,7 +154,7 @@ class NVIDIA(metaclass=DeviceSingleton):
                }
 
     def parse(self, fn, keepMaxTeam=True, dropSingleTeams=False):
-        df = pd.read_csv(fn, sep=',', skiprows=3)
+        df = pd.read_csv(fn, sep=',', skiprows=5)
         metric = df.Duration[0]
         roi_columns = ['Name', 'Device', 'Grid X', 'Block X', 'Registers Per Thread', 'Static SMem', 'Dynamic SMem', 'Duration']
         Types = { 'Grid X' : 'int32',

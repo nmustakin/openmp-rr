@@ -26,20 +26,20 @@ pushd $root_dir
 mkdir -p logs
 
 #STEP 1
-python optimize.py -b benchmarks/vAdd/Test.py --record -d $device
+python3 optimize.py -b benchmarks/vAdd/Test.py --record -d $device
 
 scenarios=(EM BONN BOMN)
 for e in ${scenarios[@]}; do
   echo $e
   #pick all recorded kernels
   # STEP 2
-  kernels=$(python optimize.py -b benchmarks/vAdd/Test.py -prk -d $device --scenario $e | cut -d : -f 2 | grep "omp")
+  kernels=$(python3 optimize.py -b benchmarks/vAdd/Test.py -prk -d $device --scenario $e | cut -d : -f 2 | grep "omp")
   for kernel in ${kernels[@]}; do
     # STEP 3
-    python optimize.py -b benchmarks/vAdd/Test.py -d $device --scenario $e --kernel $kernel --init-samples 3 --opt-samples 10
+    python3 optimize.py -b benchmarks/vAdd/Test.py -d $device --scenario $e --kernel $kernel --init-samples 3 --opt-samples 10
   done
   #STEP 6
-  python optimize.py -b benchmarks/vAdd/Test.py -d $device --scenario $e --run-optimal
+  python3 optimize.py -b benchmarks/vAdd/Test.py -d $device --scenario $e --run-optimal
 done
 
 popd

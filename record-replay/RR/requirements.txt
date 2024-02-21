@@ -17,6 +17,7 @@ Pillow==10.0.0
 platformdirs==3.10.0
 pybind11==2.11.1
 pycuda==2022.2.2
+pynvml==11.5.0
 pyparsing==3.0.9
 python-dateutil==2.8.2
 pytools==2023.1.1
