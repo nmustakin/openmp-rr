@@ -51,7 +51,7 @@ class NVIDIA(metaclass=DeviceSingleton):
         self.drv = drv
         self.StageDir = StageDir
         self.NumDevices = self.drv.Device.count()
-        self.Arch = 'sm_70'
+        self.Arch = 'sm_75'
         self.Target = 'nvptx64'
         if device < self.NumDevices:
             gpuDevice = self.drv.Device(device)
@@ -154,7 +154,8 @@ class NVIDIA(metaclass=DeviceSingleton):
                }
 
     def parse(self, fn, keepMaxTeam=True, dropSingleTeams=False):
-        df = pd.read_csv(fn, sep=',', skiprows=5)
+        df = pd.read_csv(fn, sep=',', skiprows=3)
+        #print("df columns: \n", df.columns)
         metric = df.Duration[0]
         roi_columns = ['Name', 'Device', 'Grid X', 'Block X', 'Registers Per Thread', 'Static SMem', 'Dynamic SMem', 'Duration']
         Types = { 'Grid X' : 'int32',
@@ -220,10 +221,10 @@ class NVIDIA(metaclass=DeviceSingleton):
         print(opt_cmd)
         execute_command(opt_cmd, capture_output=True, shell=True)
 
-        llc_cmd= ' '.join(['llc','-mcpu=sm_70','-mattr=+ptx76', '-O3', f'-o {HashName}.llc.out', f'{HashName}.opt.out'])
+        llc_cmd= ' '.join(['llc','-mcpu=sm_75','-mattr=+ptx76', '-O3', f'-o {HashName}.llc.out', f'{HashName}.opt.out'])
         print(llc_cmd)
         llc_ps = execute_command(llc_cmd, capture_output=True, shell=True)
-        ptxas_cmd = ['ptxas', '-v', '--gpu-name', 'sm_70', '-O3', '--warn-on-spills',
+        ptxas_cmd = ['ptxas', '-v', '--gpu-name', 'sm_75', '-O3', '--warn-on-spills',
              f'{HashName}.llc.out', '-o', f'{HashName}.image']
         if not isinstance(numRegs, type(None)):
             ptxas_cmd.append(f'-maxrregcount {numRegs}')

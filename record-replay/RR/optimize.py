@@ -10,6 +10,11 @@ import numpy as np
 import argparse
 from importlib import import_module
 import pandas as pd
+import pynvml
+from pynvml import nvmlDeviceGetTotalEnergyConsumption as nvmlEnergy
+from concurrent.futures import ProcessPoolExecutor
+
+pynvml.nvmlInit()
 
 script = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(script)
@@ -31,6 +36,19 @@ def getUserClass(pathToCLS):
         if str(obj.__name__) in Benchmark.validBenchmarks:
           return getattr(_module, name)
   raise ImportError("Could Not find Benchmark description in {0}".format(pathToCLS))
+
+def executeOnGPU(kernelName, algorithm, optParams, gpuID, bench): 
+  os.environ["CUDA_VISIBLE_DEVICES"] = str(gpuID)
+  print("Executing on GPU ", os.environ["CUDA_VISIBLE_DEVICES"])
+  kernel = bench.getKernels('record')[kernelName]
+
+  if algorithm == 'bo':
+    kernel.BO(**optParams, Policy='bo')
+  elif algorithm == 'exhaustive':
+    kernel.optimize_exhaustive(**optParams, Policy='exhaustive')
+  else: 
+    assert False, 'opt must be BO or Exhaustive'      
+  print("Done executing on GPU ", os.environ["CUDA_VISIBLE_DEVICES"])
 
 
 def main():
@@ -115,21 +133,36 @@ def main():
             os.chdir(executeDir)
             bench.preprocess(executeDir)
             bench.clean()
+            
             build_start = time.time()
+            device_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            build_start_energy = nvmlEnergy(device_handle)
             bench.build()
+            build_end_energy = nvmlEnergy(device_handle)
             build_end = time.time()
-
+            print("Build Energy = ", build_end_energy - build_start_energy)
+            
             rr_start = time.time()
+            rr_start_energy = nvmlEnergy(device_handle)
             app_time, kernels = bench.execute(Record=True)
             rr_end = time.time()
-
-            bench.register_variant('record', build_end - build_start, rr_end - rr_start, app_time, kernels)
+            rr_end_energy = nvmlEnergy(device_handle)
+            print("Record Energy = ", rr_end_energy - rr_start_energy)
+            
+            bench.register_variant('record', build_end - build_start, rr_end - rr_start, 
+                                    app_time, build_end_energy - build_start_energy, 
+                                    rr_end_energy - rr_start_energy, kernels)
 
             rr_start = time.time()
+            rr_start_energy = nvmlEnergy(device_handle)
             app_time, kernels = bench.execute(Record=False)
             rr_end = time.time()
+            rr_end_energy = nvmlEnergy(device_handle)
+            print("Original Energy = ", rr_end_energy - rr_start_energy)
 
-            bench.register_variant('original',build_end - build_start, rr_end - rr_start, app_time, kernels)
+            bench.register_variant('original',build_end - build_start, rr_end - rr_start,
+                                    app_time, build_end_energy - build_start_energy, 
+                                    rr_end_energy - rr_start_energy, kernels)
 
             bench.ckpt(ckpt_dir)
         else:
@@ -215,14 +248,18 @@ def main():
                 bench.build(fn=fn, useCase=args.scenario)
                 build_end = time.time()
 
+                device_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
                 opt_rstart = time.time()
+                opt_rstart_energy = nvmlEnergy(device_handle)
                 app_time, kernels = bench.execute(Record=False)
                 opt_rend = time.time()
+                opt_rend_energy = nvmlEnergy(device_handle)
+                print("Record Energy = ", rr_end_energy - rr_start_energy)
 
-                bench.register_variant(args.scenario,
-                                       build_end - build_start,
+                bench.register_variant(args.scenario, build_end - build_start, 
                                        opt_rend - opt_rstart, app_time,
-                                       kernels)
+                                       build_end_energy - build_start_energy, 
+                                       opt_rend_energy - opt_rstart_energy, kernels)
 
                 bench.ckpt(ckpt_dir)
 
@@ -236,14 +273,21 @@ def main():
                 else:
                     AnalysisKernels.append(kernel)
 
-                for k in AnalysisKernels:
-                    kernel = bench.getKernels('record')[k]
-                    if algorithm == 'bo':
-                      kernel.BO(**optParams, Policy='bo')
-                    elif algorithm == 'exhaustive':
-                      kernel.optimize_exhaustive(**optParams, Policy ='exhaustive')
-                    else:
-                      assert False, 'opt must be bo or exhaustive'
+#                for k in AnalysisKernels:
+ #                   kernel = bench.getKernels('record')[k]
+  #                  if algorithm == 'bo':
+   #                   kernel.BO(**optParams, Policy='bo')
+    #                elif algorithm == 'exhaustive':
+     #                 kernel.optimize_exhaustive(**optParams, Policy ='exhaustive')
+      #              else:
+       #               assert False, 'opt must be bo or exhaustive'
+                num_gpus = 8
+                with ProcessPoolExecutor(max_workers=num_gpus) as executor:
+                  futures = [executor.submit(executeOnGPU, k, algorithm, optParams, i % num_gpus, bench) for i, k in enumerate(AnalysisKernels)]
+                  #print(futures.result())
+                  # Wait for all futures to complete (optional)
+                  for future in futures:
+                      future.result()
         else:
             print('You need to record application first')
 

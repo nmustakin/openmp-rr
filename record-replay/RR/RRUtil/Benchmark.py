@@ -22,12 +22,12 @@ from RRUtil.DataBase import DB
 
 class Kernel:
     class OMPReplayer:
-        def __init__(self, Device):
+        def __init__(self, MaxMem):
             self.envVars = {
                 'OMP_NUM_THREADS' : 1,
                 'OMP_TARGET_OFFLOAD' : 'mandatory',
                 'LIBOMPTARGET_NEXTGEN_PLUGINS' : 1,
-                'LIBOMPTARGET_RR_DEVMEM_SIZE' : Device.getMaxMem()
+                'LIBOMPTARGET_RR_DEVMEM_SIZE' : MaxMem
             }
             self._env=' '.join([f'{k}={v}' for k,v in self.envVars.items()])
             self.cmd = 'llvm-omp-kernel-replay'
@@ -55,7 +55,7 @@ class Kernel:
             if not Path(self.original).exists():
                 shutil.copyfile(f'{hashname}.image', self.original)
         self.Profiler = Device
-        self.Replayer = self.OMPReplayer(Device)
+        self.Replayer = self.OMPReplayer(4) #request 4Gb memory
         self.dbDir = dbDir
         self.profiled = False
         self.NumRegs = -1
@@ -431,6 +431,23 @@ class Kernel:
     def IsProfiled(self):
         return self.profiled
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # Assuming Profiler can be converted to and from a dict for serialization purposes.
+        # Modify or remove this line if Profiler doesn't need special handling.
+        state['Profiler'] = self.Profiler.to_dict() if hasattr(self.Profiler, 'to_dict') else None
+        # Assume Replayer can be fully reconstructed from other attributes, so we don't serialize it.
+        del state['Replayer']
+        return state
+
+    def __setstate__(self, state):
+        # Restore Profiler from dict if necessary. This assumes `Device.getDevice` or similar functionality.
+        if 'Profiler' in state and state['Profiler'] is not None:
+            state['Profiler'] = Device.getDevice(state['Profiler']['Name'])
+        # Recreate Replayer based on the restored state.
+        self.__dict__.update(state)
+        self.Replayer = self.OMPReplayer(4)  # Recreate Replayer assuming it can be fully reconstructed.
+
     def to_dict(self):
         ret = dict()
         ret['Name'] = self.Name
@@ -453,11 +470,13 @@ class Kernel:
         return kernel
 
 class BenchmarkExecution:
-    def __init__(self, name, buildTime, oTime, iTime, binary, kernels):
+    def __init__(self, name, buildTime, oTime, iTime, buildEnergy, oEnergy, binary, kernels):
         self.name = name
         self.bTime = buildTime
         self.oTime = oTime
         self.iTime = iTime
+        self.buildEnergy = buildEnergy
+        self.oEnergy = oEnergy
         self.binary = binary
         self.kernels = kernels
 
@@ -467,11 +486,27 @@ class BenchmarkExecution:
         ret['BuildTime'] = self.bTime
         ret['OuterTime'] = self.oTime
         ret['InnerTime'] = self.iTime
+        ret['BuildEnergy'] = self.buildEnergy
+        ret['OuterEnergy'] = self.oEnergy
         ret['ExecutableDir'] = self.binary
         ret['Kernels'] = dict()
         for k, v in self.kernels.items():
             ret['Kernels'][k] = v.to_dict()
         return ret
+
+    # Implementing __getstate__ for serialization
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # Convert kernel objects to a serializable form (dictionaries)
+        state['kernels'] = {k: v.to_dict() for k, v in self.kernels.items()}
+        return state
+
+    # Implementing __setstate__ for deserialization
+    def __setstate__(self, state):
+        # Assuming there's a way to reconstruct Kernel objects from dictionaries
+        # This requires a from_dict method or similar in your Kernel class
+        state['kernels'] = {k: Kernel.from_dict(v) for k, v in state['kernels'].items()}
+        self.__dict__.update(state)
 
     def getKernels(self):
         return self.kernels
@@ -505,6 +540,8 @@ class BenchmarkExecution:
         return cls(name, kwargs['BuildTime'],
             kwargs['OuterTime'],
             kwargs['InnerTime'],
+            kwargs['BuildEnergy'],
+            kwargs['OuterEnergy'],
             kwargs['ExecutableDir'], kernels)
 
 class BaseBenchmark(ABC):
@@ -512,7 +549,7 @@ class BaseBenchmark(ABC):
         def __init__(self, MaxMem):
             self.envVars = {
                 'OMP_NUM_THREADS' : 2,
-                'LIBOMPTARGET_RR_DEVMEM_SIZE':  4,
+                'LIBOMPTARGET_RR_DEVMEM_SIZE':  MaxMem,
                 'LIBOMPTARGET_RR_SAVE_OUTPUT':  1,
                 'OMP_TARGET_OFFLOAD':           'mandatory',
                 'LIBOMPTARGET_NEXTGEN_PLUGINS': 1,
@@ -535,7 +572,7 @@ class BaseBenchmark(ABC):
         self.root = root
         self.versions = dict()
         self.Device = Device
-        self.recorder = self.OMPRecorder(self.Device.getMaxMem())
+        self.recorder = self.OMPRecorder(4)
 
         self.resultsDir = kwargs.get('resultsDir')
 
@@ -553,6 +590,21 @@ class BaseBenchmark(ABC):
         for k, v in self.versions.items():
             ret['versions'][k] = v.to_dict()
         return ret
+
+    # For the BaseBenchmark class, if we need to directly support pickling:
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # Convert the Device to a dict if necessary. Adjust this based on actual implementation.
+        state['Device'] = self.Device.to_dict() if hasattr(self.Device, 'to_dict') else None
+        # The recorder and versions are assumed to be serializable or have been converted to a serializable form.
+        return state
+
+    def __setstate__(self, state):
+        # Restore the Device from its dict representation if necessary.
+        if 'Device' in state and state['Device'] is not None:
+            state['Device'] = Device.getDevice(state['Device']['Name'])  # Assuming a method to recreate Device
+        self.__dict__.update(state)
+        # Assuming the recorder and versions can be directly restored from their serialized state.
 
     def printKernels(self):
         if 'record' not in self.versions:
@@ -687,8 +739,9 @@ class BaseBenchmark(ABC):
     def name(self):
         return type(self).__name__
 
-    def register_variant(self, vName, bTime, rTime, aTime, kernels):
-        self.versions[vName] = BenchmarkExecution(vName, bTime, rTime, aTime, self.executableDir, kernels)
+    #TODO: add bEnergy, rEnergy (check if appEnergy is possible)
+    def register_variant(self, vName, bTime, rTime, aTime, bEnergy, rEnergy, kernels): 
+        self.versions[vName] = BenchmarkExecution(vName, bTime, rTime, aTime, bEnergy, rEnergy, self.executableDir, kernels)
 
     def ckpt(self, fn):
         ckpt_fn = f'{fn}/{self.__class__.__name__}.ckpt.json'
