@@ -43,9 +43,9 @@ def executeOnGPU(kernelName, algorithm, optParams, gpuID, bench):
   kernel = bench.getKernels('record')[kernelName]
 
   if algorithm == 'bo':
-    kernel.BO(**optParams, Policy='bo')
+    kernel.BO(**optParams, Policy='bo', device=gpuID)
   elif algorithm == 'exhaustive':
-    kernel.optimize_exhaustive(**optParams, Policy='exhaustive')
+    kernel.optimize_exhaustive(**optParams, Policy='exhaustive', device=gpuID)
   else: 
     assert False, 'opt must be BO or Exhaustive'      
   print("Done executing on GPU ", os.environ["CUDA_VISIBLE_DEVICES"])
@@ -203,6 +203,7 @@ def main():
                 title = ' Speedup '
                 print()
                 columns = df.columns.tolist()
+                print(columns)
                 columns.remove('original')
                 for c in columns:
                     df[c] = df['original'].astype(float) / df[c].astype(float)
@@ -273,21 +274,21 @@ def main():
                 else:
                     AnalysisKernels.append(kernel)
 
-#                for k in AnalysisKernels:
- #                   kernel = bench.getKernels('record')[k]
-  #                  if algorithm == 'bo':
-   #                   kernel.BO(**optParams, Policy='bo')
-    #                elif algorithm == 'exhaustive':
-     #                 kernel.optimize_exhaustive(**optParams, Policy ='exhaustive')
-      #              else:
-       #               assert False, 'opt must be bo or exhaustive'
-                num_gpus = 8
-                with ProcessPoolExecutor(max_workers=num_gpus) as executor:
-                  futures = [executor.submit(executeOnGPU, k, algorithm, optParams, i % num_gpus, bench) for i, k in enumerate(AnalysisKernels)]
-                  #print(futures.result())
-                  # Wait for all futures to complete (optional)
-                  for future in futures:
-                      future.result()
+                for k in AnalysisKernels:
+                    kernel = bench.getKernels('record')[k]
+                    if algorithm == 'bo':
+                      kernel.BO(**optParams, Policy='bo', device=0)
+                    elif algorithm == 'exhaustive':
+                      kernel.optimize_exhaustive(**optParams, Policy ='exhaustive', device=0)
+                    else:
+                      assert False, 'opt must be bo or exhaustive'
+                #num_gpus = 8
+                #with ProcessPoolExecutor(max_workers=num_gpus) as executor:
+                #    futures = [executor.submit(executeOnGPU, k, algorithm, optParams, i % num_gpus, bench) for i, k in enumerate(AnalysisKernels)]
+                    #print(futures.result())
+                    # Wait for all futures to complete (optional)
+                #    for future in futures:
+                 #       future.result()
         else:
             print('You need to record application first')
 

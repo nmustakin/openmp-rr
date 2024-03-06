@@ -12,8 +12,11 @@ import math
 import itertools as it
 import uuid
 import hashlib
+import pandas as pd
 
 from bayes_opt import BayesianOptimization, UtilityFunction
+import pynvml
+from pynvml import nvmlDeviceGetTotalEnergyConsumption as nvmlEnergy
 
 from RRUtil import Device
 from RRUtil.Utilities import createDir
@@ -106,6 +109,10 @@ class Kernel:
         db = DB(self.getDBName(**kwargs), self.getDefaultKey())
         return db.getBaseline()
 
+    def getDefaultEnergy(self, **kwargs):
+        db = DB(self.getDBName(**kwargs), self.getDefaultKey())
+        return db.getBaselineEnergy()
+
     def Stats(self, **kwargs):
         configKey = self.getConfigKey(kwargs)
         db = DB(self.getDBName(**kwargs), self.getDefaultKey())
@@ -158,6 +165,8 @@ class Kernel:
 
     @staticmethod
     def getConfigKey(config):
+        #filtered_config = {k: v for k, v in config.items() if k != 'deviceID'}
+        #return '-'.join([str(k)+'='+str(filtered_config[k]) for k in filtered_config])
         return '-'.join([str(k)+'='+str(config[k]) for k in config])
 
     def optimize_exhaustive(self, **kwargs):
@@ -179,8 +188,8 @@ class Kernel:
             # Get data for baseline.
             if not (defaultKey in db):
                 print('sample defaultKey', defaultKey)
-                Valid, SStats, DStats, Duration = self.sample()
-                db.Add(defaultKey, [SStats], DStats, [Duration], Valid)
+                Valid, SStats, DStats, Duration, Energy = self.sample()
+                db.Add(defaultKey, [SStats], DStats, [Duration], [Energy], Valid)
 
             experiments = []
             if 'MaxThreads' in config:
@@ -210,17 +219,22 @@ class Kernel:
             bestSpeedup = None
             worstConfig = None
             worstSpeedup = None
+            bestEnergyConfig = None
+            bestImprov = None
+            worstEnergyConfig = None
+            worstImprov = None
             for e in experiments:
-                print(e)
+                #print(e)
                 key = self.getConfigKey(e)
 
-                Valid, SStats, DStats, Duration = (0, -1, -1, 1)
+                Valid, SStats, DStats, Duration, Energy = (0, -1, -1, 1, 1)
                 if not (key in db):
-                    Valid, SStats, DStats, Duration = self.sample(Tries=5, **e)
-                db.Add(key, [SStats], DStats, [Duration], Valid)
+                    Valid, SStats, DStats, Duration, Energy = self.sample(Tries=5, **e)
+                db.Add(key, [SStats], DStats, [Duration], [Energy], Valid)
 
                 speedup = db.Speedup(key)
-                print(f'{key} -> {speedup}')
+                energy_improv = db.EnergyImprov(key)
+                print(f'{key} -> Speedup: {speedup}, Energy_Improv: {energy_improv}')
                 if bestSpeedup is None or bestSpeedup < speedup:
                     bestSpeedup = speedup
                     bestConfig = e
@@ -228,8 +242,17 @@ class Kernel:
                     worstSpeedup = speedup
                     worstConfig = e
 
-            print(f'Kernel: {self.Name} Best result: {bestConfig}; f(x) = {bestSpeedup}')
-            print(f'Kernel: {self.Name} Worst result: {worstConfig}; f(x) = {worstSpeedup}')
+                if bestImprov is None or bestImprov < energy_improv:
+                    bestImprov = energy_improv
+                    bestEnergyConfig = e
+                if worstImprov is None or worstImprov > energy_improv:
+                    worstImprov = energy_improv
+                    worstEnergyConfig = e
+
+            print(f'Kernel: {self.Name} Best speedup: {bestConfig}; f(x) = {bestSpeedup}')
+            print(f'Kernel: {self.Name} Worst speedup: {worstConfig}; f(x) = {worstSpeedup}')
+            print(f'Kernel: {self.Name} Least energy: {bestEnergyConfig}; f(x) = {bestImprov}')
+            print(f'Kernel: {self.Name} Most energy: {worstEnergyConfig}; f(x) = {worstImprov}')
 
         optimize(self, **kwargs)
 
@@ -309,10 +332,11 @@ class Kernel:
             #default values
             initSamples = kwargs.get('initSamples', 3)
             optSamples = kwargs.get('optSamples', 10)
-            print(initSamples, optSamples)
+            deviceID = kwargs.get('device', 0)
+            #print(initSamples, optSamples)
 
             pBounds = self.getBounds(**kwargs)
-            print('pBounds', pBounds)
+            #print('pBounds', pBounds)
 
             random_state = kwargs.get('random_state', 1234)
             optimizer = BayesianOptimization(f = None,
@@ -325,7 +349,10 @@ class Kernel:
             utility = UtilityFunction(kind = "ucb", kappa = 1.96, xi = 0.01)
 
             db = DB(self.getDBName(**kwargs), self.getDefaultKey())
+            stats_file = f'{self.dbDir}/results_{self.HashName}.csv'
 
+            stats = [] 
+            
             mData =  {
                        'args' : kwargs,
                        'bounds' : pBounds,
@@ -335,8 +362,8 @@ class Kernel:
             db.setMetadata(mData)
 
             if not (self.getDefaultKey() in db):
-                Valid, SStats, DStats, Duration = self.sample()
-                db.Add(self.getDefaultKey(), [SStats], DStats, [Duration], Valid)
+                Valid, SStats, DStats, Duration, Energy = self.sample()
+                db.Add(self.getDefaultKey(), [SStats], DStats, [Duration], [Energy], Valid)
 
             pending = optSamples + initSamples
 
@@ -346,58 +373,75 @@ class Kernel:
                 else:
                     NextPoint = optimizer.suggest(utility)
                 config = self.convertPointToValues(NextPoint)
+                config['DeviceID'] = deviceID
                 print("================= Next Point ====================")
                 print(NextPoint)
-                print(config)
+                #print(config)
                 print(f'Performing {performed} experiment out of {pending}')
                 print("=================================================")
 
                 key = self.getConfigKey(config)
-                Valid, SStats, DStats, Duration = (0, -1, -1, 1)
+                Valid, SStats, DStats, Duration, Energy = (0, -1, -1, 1, 1)
                 if not (key in db):
-                    Valid, SStats, DStats, Duration = self.sample(Tries=5, **config)
-                db.Add(key, [SStats], DStats, [Duration], Valid)
-                Target = db.Speedup(key)
+                    Valid, SStats, DStats, Duration, Energy = self.sample(Tries=5, **config)
+                db.Add(key, [SStats], DStats, [Duration], [Energy], Valid)
+                Speedup = db.Speedup(key)
+                EnergyGain = db.EnergyImprov(key)
+                
+                if(Speedup >= 1.05 or EnergyGain >= 1): 
+                    row_data = {**config, 'Speedup':Speedup, 'Energy_Improvment': EnergyGain}
+                    stats.append(row_data)
 
-                print('{0} -> {1}'.format(key, Target))
+                print('{0} -> Speedup: {1} , EnergyImprov: {2}'.format(key, Speedup, EnergyGain))
                 try:
                     # Update the optimizer with the evaluation results.
-                    # This should be in try-except to catch any errors!
-                    optimizer.register(params = NextPoint, target = Target)
+                    # Energy - Delay product - EnergyGain * Speedup
+                    optimizer.register(params = NextPoint, target = EnergyGain * Speedup)
+                    #optimizer.register(params = NextPoint, target = Speedup)
                 except:
                     assert False, 'optimizer error'
 
-            print('Kernel: {} Best result: {}; f(x) = {}.'.format(self.Name, optimizer.max['params'], optimizer.max['target']))
+            print('Kernel: {} Best result: {}; f_energy(x) = {}.'.format(self.Name, optimizer.max['params'], optimizer.max['target']))
+            df = pd.DataFrame(stats)
+            df.to_csv(stats_file, index=False)
 
         optimize(self, **kwargs)
 
     def sample(self, **kwargs):
         Tries = kwargs.pop('Tries', 5)
+        deviceID = kwargs.get('deviceID', 0)
         NumThreads = kwargs.get('NumThreads', None)
         NumTeams = kwargs.get('NumTeams', None)
-
+       
+        device_handle = pynvml.nvmlDeviceGetHandleByIndex(deviceID)
         start = time.time()
+        #start energy here
+        start_energy = nvmlEnergy(device_handle)
         StaticStats = self.Profiler.deviceCompile(self.original, self.Name, self.HashName, **kwargs)
         SStats = None
         if StaticStats:
             SStats = StaticStats[self.Name]
             if NumThreads is not None:
                 if ( SStats[0] * NumThreads > self.Profiler.MaxRegBlock ):
-                    return False, None, None, None
+                    return False, None, None, None, None
             if ( SStats[1] > self.Profiler.MaxSharedMemBlock ) :
-                return False, None, None, None
+                return False, None, None, None, None
 
         DStats = list()
         res = self.execute(NumThreads, NumTeams, maxIters=Tries)
         if len(res) == 0:
             end = time.time()
-            return False, None, None, None
+            #end energy here
+            end_energy = nvmlEnergy(device_handle)
+            return False, None, None, None, None
 
         DStats += res
         stats = np.array(DStats)[:,-1]
         end = time.time()
+        #end energy here
+        end_energy = nvmlEnergy(device_handle)
 
-        return True, SStats, DStats, end-start
+        return True, SStats, DStats, end-start, end_energy-start_energy
 
     def execute(self, NumThreads=None, NumTeams=None, maxIters = 9,
                 keepMaxTeam=True, dropSingleTeams=False):
@@ -412,8 +456,8 @@ class Kernel:
                     shell=True, ContinueOnFailure=True)
             if ret != 0:
                 return list()
-            print(os.getcwd())
-            print(self.Name)
+            #print(os.getcwd())
+            #print(self.HashName)
             kernelDescr = self.Profiler.parse(f'{self.HashName}.csv',
                                               keepMaxTeam,
                                               dropSingleTeams)[self.Name]
@@ -683,7 +727,7 @@ class BaseBenchmark(ABC):
 
         if Profile:
             csvFile=self.executable.replace('/', '_')
-            print("Reading csvfile: ", csvFile)
+            #print("Reading csvfile: ", csvFile)
             kernelDescr = self.Device.parse(f'{csvFile}.csv',
                                             keepMaxTeam=True, dropSingleTeams=True)
 

@@ -154,7 +154,16 @@ class NVIDIA(metaclass=DeviceSingleton):
                }
 
     def parse(self, fn, keepMaxTeam=True, dropSingleTeams=False):
-        df = pd.read_csv(fn, sep=',', skiprows=3)
+        
+        header_rows = 0
+        with open(fn, 'r') as file:
+           for line in file: 
+               if line.startswith('=='):
+                   header_rows += 1
+               else:
+                   break
+
+        df = pd.read_csv(fn, sep=',', skiprows=header_rows)
         #print("df columns: \n", df.columns)
         metric = df.Duration[0]
         roi_columns = ['Name', 'Device', 'Grid X', 'Block X', 'Registers Per Thread', 'Static SMem', 'Dynamic SMem', 'Duration']
@@ -233,8 +242,8 @@ class NVIDIA(metaclass=DeviceSingleton):
         ptxas_cmd = ' '.join(ptxas_cmd)
         print(ptxas_cmd)
         code, stdout, stderr = execute_command(ptxas_cmd, capture_output=True, shell=True)
-        print(stdout)
-        print(stderr)
+        #print(stdout)
+        #print(stderr)
         return self.parsePTXAS(stdout, stderr)
 
     def parsePTXAS(self, stdout, stderr):

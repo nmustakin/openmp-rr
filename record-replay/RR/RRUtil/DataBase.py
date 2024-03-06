@@ -9,10 +9,12 @@ class DB:
         self.Data = dict()
         self.MetaData = dict()
         self.DefaultExecTime = None
+        self.DefaultExecEnergy = None
         self.Default = defaultKey
 
         Data = { 'MetaData' : {} , 'Stats' : {} }
         if Path(self.fn).exists():
+            #print("Json file: ", self.fn)
             with open(self.fn, 'r') as fd:
                 Data = json.load(fd)
 
@@ -48,10 +50,18 @@ class DB:
         if self.Default in self.Data:
             return self.Duration(self.Default)
 
+    def getBaselineEnergy(self):
+        if self.Default in self.Data:
+            return self.Energy(self.Default)
+
     def Baseline(self):
         if self.Default in self.Data:
             self.DefaultExecTime = self.Duration(self.Default)
 
+    def BaselineEnergy(self):
+        if self.Default in self.Data:
+            self.DefaultExecEnergy = self.Energy(self.Default)
+    
     def __contains__(self, key):
         return key in self.Data
 
@@ -63,8 +73,22 @@ class DB:
         if not self.Data[key]['valid']:
             return 1E12
 
+        #print("-----------IN DURATION----------\n", self.Data[key]['dynamic'])
         duration = np.array([ v[-1] for v in self.Data[key]['dynamic']]).mean()
         return duration
+
+    def Energy(self, key):
+        if key not in self.Data:
+            raise RuntimeError(f"Key {key} not in Data, cannot compute speedup")
+
+        #We ground performance gain
+        if not self.Data[key]['valid']:
+            return 1E12
+
+        #print("------IN ENERGY------", self.Data[key]['energy'])
+        #energy = np.array([ v[-1] for v in self.Data[key]['energy']]).mean()
+        energy = np.array(self.Data[key]['energy']).mean()
+        return energy
 
     def Speedup(self, key):
         if isinstance(self.DefaultExecTime, type(None)):
@@ -83,6 +107,24 @@ class DB:
         duration = self.Duration(key)
         speedup= self.DefaultExecTime / duration
         return speedup
+
+    def EnergyImprov(self, key):
+        if isinstance(self.DefaultExecEnergy, type(None)):
+            self.BaselineEnergy()
+
+        if isinstance(self.DefaultExecEnergy, type(None)):
+            raise RuntimeError(f"'Baseline not in Data, cannot compute speedup")
+
+        if key not in self.Data:
+            raise RuntimeError(f"Key {key} not in Data, cannot compute speedup")
+
+        #We ground performance gain
+        if not self.Data[key]['valid']:
+            return 0.01
+
+        energy = self.Energy(key)
+        improv = self.DefaultExecEnergy / energy
+        return improv
 
     def GetSpeedUps(self):
         X = list()
@@ -105,20 +147,43 @@ class DB:
             configs.append(key)
         return configs, X, Y
 
+    def GetEnergyImprovs(self):
+        X = list()
+        Y = list()
+        configs = list()
+        for key in self.Data.keys():
+            if key == self.Default:
+                continue
+            x = dict([v.split('=') for v in key.split('-')])
+            for k,v in x.items():
+                if v == 'None':
+                    x[k] = -1
+                else:
+                    x[k] = int(v)
+
+            y = self.EnergyImprov(key)
+            for i in range(0, self.Data[key]['count']):
+                X.append(x)
+                Y.append(y)
+            configs.append(key)
+        return configs, X, Y
+
     # Add key in database, if key exists increase counter
     # and ignore parameters
-    def Add(self, key, static, dynamic, duration, Valid):
+    def Add(self, key, static, dynamic, duration, energy, Valid):
         if key not  in self.Data:
             self.Data[key] = dict()
             self.Data[key]['static'] = list()
             self.Data[key]['dynamic'] = list()
             self.Data[key]['duration'] = list()
+            self.Data[key]['energy'] = list()
             self.Data[key]['count'] = 1
             self.Data[key]['valid'] = Valid
             if Valid:
               self.Data[key]['static'] += static
               self.Data[key]['dynamic'] += dynamic
               self.Data[key]['duration'] += duration
+              self.Data[key]['energy'] += energy
         else:
             self.Data[key]['count'] += 1
 

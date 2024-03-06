@@ -13,7 +13,7 @@ def createDir(path):
     return str(testPath.resolve())
 
 def execute_command(cmd, **kwargs):
-    print('Execute', cmd, 'kwargs', kwargs)
+    #print('Execute', cmd, 'kwargs', kwargs)
     ContinueOnFailure = kwargs.pop("ContinueOnFailure", False)
     try:
         p = subprocess.run( cmd, **kwargs )
