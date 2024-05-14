@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstring>
 #include <limits.h>
+#include <nv_metrics.h>
 
 using namespace std::chrono;
 using namespace std;
@@ -22,15 +23,30 @@ void vecAdd(fptype* X, fptype* Y, size_t numElements){
 }
 
 int main(int argc, char *argv[]){
+  
   size_t numElements = (atol(argv[1])*1024*1024)/sizeof(fptype);
   std::cout << "Num Elements:" << numElements << "\n";
-
+ 
   fptype *X = new fptype[numElements];
   fptype *Y = new fptype[numElements];
   memset((void*)X,1, sizeof(fptype)*numElements);
+  
+  // Setup metrics
+  std::vector<std::string> metrics = {
+    "sm__sass_thread_inst_executed_op_fadd_pred_on.sum",
+    "sm__sass_thread_inst_executed_op_fmul_pred_on.sum",
+    "sm__sass_thread_inst_executed_op_ffma_pred_on.sum"};
+ 
+  // Start measurement
+  //nvmetrics::measureMetricsStart(metrics);
+  
   auto start = high_resolution_clock::now();
   vecAdd(X, Y, numElements);
   auto stop = high_resolution_clock::now();
+  // Stop measurement
+  //std::vector<double> result = nvmetrics::measureMetricsStop();
+  //assert(metrics.size() == result.size());
+
 
   std::chrono::duration<double> duration = stop - start;
   std::cout<<"__ExecutionTime__:" << duration.count() << "\n";

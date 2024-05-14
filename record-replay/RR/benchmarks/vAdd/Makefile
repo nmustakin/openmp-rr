@@ -1,7 +1,8 @@
 LECPP ?=clang++
 LEOPT ?=-O3
-LEFLAGS ?=-fopenmp -fopenmp-targets=nvptx64 -Xopenmp-target=nvptx64 -march=sm_70 -fopenmp-offload-mandatory -foffload-lto -Wl,--embed-bitcode
-CPPFLAGS=${LEOPT} ${LEFLAGS} -std=c++14
+LEFLAGS ?=-fopenmp -fopenmp-targets=nvptx64 -Xopenmp-target=nvptx64 -march=sm_75 -fopenmp-offload-mandatory -foffload-lto -lnv_metrics -Wl,--embed-bitcode
+INCLUDE_FLAGS ?=-I/data2/nmn/nvmetrics/lib/ -L/data2/nmn/nvmetrics/build/lib
+CPPFLAGS=${LEOPT} ${INCLUDE_FLAGS} ${LEFLAGS} -std=c++14
 LDFLAGS?=
 BUILDDIR?=./
 EXEDIR?=${BUILDDIR}
