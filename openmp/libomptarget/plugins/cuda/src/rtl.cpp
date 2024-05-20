@@ -21,6 +21,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <nv_metrics.h>
 
 #include "Debug.h"
 #include "DeviceEnvironment.h"
@@ -1235,16 +1236,38 @@ public:
          (!IsSPMDMode ? (IsGenericMode ? "Generic" : "SPMD-Generic") : "SPMD"));
 
     CUstream Stream = getStream(DeviceId, AsyncInfo);
+    
+    // Setup metrics
+    std::vector<std::string> metrics = {
+      "sm__sass_thread_inst_executed_op_fadd_pred_on.sum",
+      "sm__sass_thread_inst_executed_op_fmul_pred_on.sum",
+      "sm__sass_thread_inst_executed_op_ffma_pred_on.sum",
+      "achieved_occupancy",
+      "alu_fu_utilization",
+      "atomic_replay_overhead"};
+    
+    // Start measurement
+    nvmetrics::measureMetricsStart(metrics);
+    
     Err = cuLaunchKernel(KernelInfo->Func, CudaBlocksPerGrid, /* gridDimY */ 1,
                          /* gridDimZ */ 1, CudaThreadsPerBlock,
                          /* blockDimY */ 1, /* blockDimZ */ 1,
                          DynamicMemorySize, Stream, &Args[0], nullptr);
+
     if (!checkResult(Err, "Error returned from cuLaunchKernel\n"))
       return OFFLOAD_FAIL;
+
+    // Stop measurement
+    std::vector<double> result = nvmetrics::measureMetricsStop();
+    assert(metrics.size() == result.size());
 
     DP("Launch of entry point at " DPxMOD " successful!\n",
        DPxPTR(TgtEntryPtr));
 
+    // Print result of the measurement
+    for (int i = 0; i < result.size(); i++) {
+      printf("%s: %lf \n", metrics[i].c_str(), result[i]);
+    }
     return OFFLOAD_SUCCESS;
   }
 

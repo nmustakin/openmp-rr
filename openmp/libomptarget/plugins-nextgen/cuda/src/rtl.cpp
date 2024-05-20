@@ -20,7 +20,7 @@
 #include "DeviceEnvironment.h"
 #include "GlobalHandler.h"
 #include "PluginInterface.h"
-
+#include <nv_metrics.h>
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Frontend/OpenMP/OMPConstants.h"
 #include "llvm/Frontend/OpenMP/OMPGridValues.h"
@@ -931,11 +931,26 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   if (!Stream)
     return Plugin::error("Failure to get stream");
 
+  
+  std::vector<std::string> metrics = {
+      "l1tex__t_requests_pipe_lsu_mem_global_op_ld.sum",
+      "l1tex__t_requests_pipe_lsu_mem_global_op_st.sum"};
+
+  // Start measurement
+  nvmetrics::measureMetricsStart(metrics);
+
   CUresult Res =
       cuLaunchKernel(Func, NumBlocks, /* gridDimY */ 1,
                      /* gridDimZ */ 1, NumThreads,
                      /* blockDimY */ 1, /* blockDimZ */ 1, DynamicMemorySize,
                      Stream, (void **)KernelArgs, nullptr);
+  // Stop measurement
+  std::vector<double> result = nvmetrics::measureMetricsStop();
+  //assert(metrics.size() == result.size());
+  // Print result of the measurement
+  for (int i = 0; i < result.size(); i++) {
+    printf("%s: %lf\n", metrics[i].c_str(), result[i]); 
+  } 
   return Plugin::check(Res, "Error in cuLaunchKernel for '%s': %s", getName());
 }
 

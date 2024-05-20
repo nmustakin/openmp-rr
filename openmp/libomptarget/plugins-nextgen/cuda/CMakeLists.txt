@@ -30,6 +30,10 @@ add_definitions("-DTARGET_NAME=CUDA")
 # requires changing the original plugins.
 add_definitions(-DDEBUG_PREFIX="TARGET CUDA RTL")
 
+# Include NV Metrics API directories
+include_directories(/data2/nmn/nvmetrics/lib)
+link_directories(/data2/nmn/nvmetrics/build/lib)
+
 set(LIBOMPTARGET_DLOPEN_LIBCUDA OFF)
 option(LIBOMPTARGET_FORCE_DLOPEN_LIBCUDA "Build with dlopened libcuda" ${LIBOMPTARGET_DLOPEN_LIBCUDA})
 
@@ -57,7 +61,7 @@ if (LIBOMPTARGET_CAN_LINK_LIBCUDA AND NOT LIBOMPTARGET_FORCE_DLOPEN_LIBCUDA)
     ${OPENMP_PTHREAD_LIB}
     "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/../exports"
     "-Wl,-z,defs"
-
+    nv_metrics
     NO_INSTALL_RPATH
   )
 else()
@@ -81,7 +85,7 @@ else()
     ${OPENMP_PTHREAD_LIB}
     "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/../exports"
     "-Wl,-z,defs"
-
+    nv_metrics
     NO_INSTALL_RPATH
   )
 endif()

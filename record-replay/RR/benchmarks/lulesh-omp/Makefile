@@ -1,7 +1,7 @@
 LECPP ?=clang++
 LEOPT ?=-O3
 #LEFLAGS=-fopenmp -fopenmp-targets=amdgcn-amd-amdhsa -Xopenmp-target=amdgcn-amd-amdhsa -march=gfx90a -fopenmp-offload-mandatory -foffload-lto -Wl,--embed-bitcode
-LEFLAGS?=-fopenmp -fopenmp-targets=nvptx64 -Xopenmp-target=nvptx64 -march=sm_70 -fopenmp-offload-mandatory -foffload-lto -Wl,--embed-bitcode
+LEFLAGS?=-v -fopenmp -fopenmp-targets=nvptx64 -Xopenmp-target=nvptx64 -march=sm_75 -fopenmp-offload-mandatory -foffload-lto -Wl,--embed-bitcode
 CPPFLAGS=${LEOPT} ${LEFLAGS} -std=c++14
 LDFLAGS?=
 BUILDDIR?=./
