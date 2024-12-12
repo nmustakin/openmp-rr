@@ -66,7 +66,8 @@ class NVIDIA(metaclass=DeviceSingleton):
             self.RegFileSizeSMP = float(gpuDevice.MAX_REGISTERS_PER_MULTIPROCESSOR)
             self.MaxRegBlock = float(gpuDevice.MAX_REGISTERS_PER_BLOCK)
             self.MaxThreadBlockSize = float(gpuDevice.MAX_THREADS_PER_BLOCK)
-            self._profile = 'nvprof --print-gpu-trace --normalized-time-unit ns --csv --log-file {output} {executable}'
+            #self._profile = 'nvprof --print-gpu-trace --normalized-time-unit ns --csv --log-file {output} {executable}'
+            self._profile = '{executable}'
             self._env = ''
             #self.Name = gpuDevice.name()
             self.Name = 'nvidia'
@@ -165,7 +166,7 @@ class NVIDIA(metaclass=DeviceSingleton):
 
         df = pd.read_csv(fn, sep=',', skiprows=header_rows)
         #print("df columns: \n", df.columns)
-        metric = df.Duration[0]
+        #metric = df.Duration[0]
         roi_columns = ['Name', 'Device', 'Grid X', 'Block X', 'Registers Per Thread', 'Static SMem', 'Dynamic SMem', 'Duration']
         Types = { 'Grid X' : 'int32',
                   'Block X' : 'int32',
@@ -227,11 +228,11 @@ class NVIDIA(metaclass=DeviceSingleton):
         if MinTeams is not None:
             opt_cmd.append(f'--min-blocks={MinTeams}')
         opt_cmd = ' '.join(opt_cmd)
-        print(opt_cmd)
+        #print(opt_cmd)
         execute_command(opt_cmd, capture_output=True, shell=True)
 
         llc_cmd= ' '.join(['llc','-mcpu=sm_75','-mattr=+ptx76', '-O3', f'-o {HashName}.llc.out', f'{HashName}.opt.out'])
-        print(llc_cmd)
+        #print(llc_cmd)
         llc_ps = execute_command(llc_cmd, capture_output=True, shell=True)
         ptxas_cmd = ['ptxas', '-v', '--gpu-name', 'sm_75', '-O3', '--warn-on-spills',
              f'{HashName}.llc.out', '-o', f'{HashName}.image']
@@ -240,7 +241,7 @@ class NVIDIA(metaclass=DeviceSingleton):
         if not isinstance(regAggr, type(None)):
             ptxas_cmd.append(f'-regUsageLevel {regAggr}')
         ptxas_cmd = ' '.join(ptxas_cmd)
-        print(ptxas_cmd)
+        #print(ptxas_cmd)
         code, stdout, stderr = execute_command(ptxas_cmd, capture_output=True, shell=True)
         #print(stdout)
         #print(stderr)
@@ -473,7 +474,7 @@ class AMDGPU(metaclass=DeviceSingleton):
         df = pd.read_csv(fn, sep=',')
         df.rename(columns={'KernelName' : 'Name'}, inplace=True)
         df['Duration'] = df['EndNs'] - df['BeginNs']
-        metric = df.Duration[0]
+        #metric = df.Duration[0]
         roi_columns = ['Name','gpu-id','grd','wgr','lds','scr', 'arch_vgpr','accum_vgpr','sgpr','wave_size','Duration']
         df.Duration = pd.to_numeric(df.Duration)
         df = df[df.Name.str.contains('__omp_offloading')]

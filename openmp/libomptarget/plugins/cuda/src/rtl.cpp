@@ -21,6 +21,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <unordered_map>
 #include <nv_metrics.h>
 
 #include "Debug.h"
@@ -1238,16 +1239,29 @@ public:
     CUstream Stream = getStream(DeviceId, AsyncInfo);
     
     // Setup metrics
-    std::vector<std::string> metrics = {
-      "sm__sass_thread_inst_executed_op_fadd_pred_on.sum",
-      "sm__sass_thread_inst_executed_op_fmul_pred_on.sum",
-      "sm__sass_thread_inst_executed_op_ffma_pred_on.sum",
+    std::vector<std::string> MetricNames = {
       "achieved_occupancy",
-      "alu_fu_utilization",
-      "atomic_replay_overhead"};
-    
+      "branch_efficiency",
+      "dram_read_transactions",
+      "dram_write_transactions",
+      "global_load_requests",
+      "global_store_requests",
+      "local_load_requests",
+      "local_store_requests"
+    };
+
+    std::vector<std::string> MetricIDs = {
+      "sm__warps_active.avg.pct_of_peak_sustained_active",
+      "smsp__sass_average_branch_targets_threads_uniform.pct",
+      "dram__sectors_read.sum",
+      "dram__sectors_write.sum",
+      "l1tex__t_requests_pipe_lsu_mem_global_op_ld.sum",
+      "l1tex__t_requests_pipe_lsu_mem_global_op_st.sum",
+      "l1tex__t_requests_pipe_lsu_mem_local_op_ld.sum",
+      "l1tex__t_requests_pipe_lsu_mem_local_op_st.sum"
+    };
     // Start measurement
-    nvmetrics::measureMetricsStart(metrics);
+    nvmetrics::measureMetricsStart(MetricIDs);
     
     Err = cuLaunchKernel(KernelInfo->Func, CudaBlocksPerGrid, /* gridDimY */ 1,
                          /* gridDimZ */ 1, CudaThreadsPerBlock,
@@ -1258,16 +1272,17 @@ public:
       return OFFLOAD_FAIL;
 
     // Stop measurement
-    std::vector<double> result = nvmetrics::measureMetricsStop();
-    assert(metrics.size() == result.size());
+    std::vector<double> MetricResults = nvmetrics::measureMetricsStop();
+    assert(MetricIDs.size() == MetricResults.size());
 
     DP("Launch of entry point at " DPxMOD " successful!\n",
        DPxPTR(TgtEntryPtr));
 
     // Print result of the measurement
-    for (int i = 0; i < result.size(); i++) {
-      printf("%s: %lf \n", metrics[i].c_str(), result[i]);
+    for (int i = 0; i < MetricResults.size(); i++) {
+      printf("||NVMetrics|| %s: %lf \n", MetricNames[i].c_str(), MetricResults[i]);
     }
+
     return OFFLOAD_SUCCESS;
   }
 

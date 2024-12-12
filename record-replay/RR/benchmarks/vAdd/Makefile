@@ -1,8 +1,8 @@
 LECPP ?=clang++
 LEOPT ?=-O3
 #LEFLAGS ?=-fopenmp -fopenmp-targets=nvptx64 -Xopenmp-target=nvptx64 -march=sm_75 -fopenmp-offload-mandatory --libomptarget-nvptx-bc-path=/data2/nmn/llvm-new/llvm-project/build/runtimes/runtimes-bins/offload/DeviceRTL/libomptarget-nvptx-sm_75.bc -foffload-lto -Wl,--embed-bitcode
-LEFLAGS ?=-lnv_metrics -fopenmp -fopenmp-targets=nvptx64 -Xopenmp-target=nvptx64 -march=sm_75 -fopenmp-offload-mandatory --libomptarget-nvptx-bc-path=/data2/nmn/RR-back/openmp-rr/build/runtimes/runtimes-bins/offload/DeviceRTL/libomptarget-nvptx-sm_75.bc -foffload-lto -Wl,--embed-bitcode
-INCLUDE_FLAGS ?=-I/data2/nmn/nvmetrics/lib -L/data2/nmn/nvmetrics/build/lib
+LEFLAGS +=-lcupti -lnv_metrics -fopenmp -fopenmp-targets=nvptx64 -Xopenmp-target=nvptx64 -march=sm_75 -fopenmp-offload-mandatory --libomptarget-nvptx-bc-path=/data2/nmn/RR-back/openmp-rr/build/runtimes/runtimes-bins/offload/DeviceRTL/libomptarget-nvptx-sm_75.bc -foffload-lto -Wl,--embed-bitcode
+INCLUDE_FLAGS ?=-I/data2/nmn/nvmetrics/lib -L/data2/nmn/nvmetrics/build/lib -I/usr/local/cuda-12.3/include/ -L/usr/local/cuda-12.3/lib64/
 CPPFLAGS=${LEOPT} ${INCLUDE_FLAGS} ${LEFLAGS} -std=c++14
 LDFLAGS?=
 BUILDDIR?=./

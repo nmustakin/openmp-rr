@@ -13,6 +13,7 @@ import itertools as it
 import uuid
 import hashlib
 import pandas as pd
+import re
 
 from bayes_opt import BayesianOptimization, UtilityFunction
 import pynvml
@@ -81,6 +82,7 @@ class Kernel:
     def getDefaultKey(self):
         # This will serve as our Baseline
         defaultConfig = { 'NumThreads' : None, 'NumTeams' : None }
+        #TODO: replace with cupti (might not need to, Profiler seems to be an alias for Device)
         for compilationConfig in self.Profiler.getCompilationConfigs():
             defaultConfig.update( { compilationConfig : None } )
         defaultKey = self.getConfigKey(defaultConfig)
@@ -140,10 +142,14 @@ class Kernel:
         NumTeams = bestConfig['NumTeams']
         self.prof.deviceCompile(self.original, self.Name, self.HashName, regs, pressure)
         print('Best :{} {}={} {}={} (s)'.format( best, 'speedup', Y[index_max], 'Duration', db.Duration(Configs[index_max])))
+        # TODO: Replayer.command() runs nvprof, need to change that. 
         cmd = self.Replayer.command(NumThreads, NumTeams).format(kernel_name=f'{self.HashName}')
         env = self.Replayer.env()
-        cmd = self.Profiler.command().format(executable=cmd, output=f'{self.HashName}.csv')
-        env += ' ' + self.Profiler.env()
+        #TODO: replace with cupti
+        #Profiler.command() runs nvprof
+        #cmd = self.Profiler.command().format(executable=cmd, output=f'{self.HashName}.csv')
+        cmd = self.Profiler.command().format(executable=cmd)
+        #env += ' ' + self.Profiler.env()
         print('Cmd:', env + ' ' + cmd)
 
     @staticmethod
@@ -187,9 +193,9 @@ class Kernel:
 
             # Get data for baseline.
             if not (defaultKey in db):
-                print('sample defaultKey', defaultKey)
-                Valid, SStats, DStats, Duration, Energy = self.sample()
-                db.Add(defaultKey, [SStats], DStats, [Duration], [Energy], Valid)
+                #print('sample defaultKey', defaultKey)
+                Valid, SStats, DStats, Duration, Energy, GLoads, GStores = self.sample()
+                db.Add(defaultKey, [SStats], DStats, [Duration], [Energy], [GLoads], [GStores], Valid)
 
             experiments = []
             if 'MaxThreads' in config:
@@ -219,21 +225,34 @@ class Kernel:
             bestSpeedup = None
             worstConfig = None
             worstSpeedup = None
+            
             bestEnergyConfig = None
             bestImprov = None
             worstEnergyConfig = None
             worstImprov = None
+            
+            leastLoads = None
+            leastLoadConfig = None
+            leastStores = None
+            leastStoreConfig = None
+            mostLoads = None
+            mostLoadConfig = None
+            mostStores = None
+            mostStoreConfig = None
+
             for e in experiments:
                 #print(e)
                 key = self.getConfigKey(e)
 
-                Valid, SStats, DStats, Duration, Energy = (0, -1, -1, 1, 1)
+                Valid, SStats, DStats, Duration, Energy, GLoads, GStores = (0, -1, -1, 1, 1, 1, 1)
                 if not (key in db):
-                    Valid, SStats, DStats, Duration, Energy = self.sample(Tries=5, **e)
-                db.Add(key, [SStats], DStats, [Duration], [Energy], Valid)
+                    Valid, SStats, DStats, Duration, Energy, GLoads, GStores = self.sample(Tries=5, **e)
+                db.Add(key, [SStats], DStats, [Duration], [Energy], [GLoads], [GStores], Valid)
 
                 speedup = db.Speedup(key)
                 energy_improv = db.EnergyImprov(key)
+                load_ratio = db.GLoads(key)
+                store_ratio = db.GStores(key)
                 print(f'{key} -> Speedup: {speedup}, Energy_Improv: {energy_improv}')
                 if bestSpeedup is None or bestSpeedup < speedup:
                     bestSpeedup = speedup
@@ -249,10 +268,29 @@ class Kernel:
                     worstImprov = energy_improv
                     worstEnergyConfig = e
 
+                if leastLoads is None or leastLoads > GLoads:
+                    leastLoads = GLoads
+                    leastLoadConfig = e
+                if leastStores is None or leastStores > GStores:
+                    leastStores = GStores
+                    leastStoreConfig = e
+
+                if mostLoads is None or mostLoads < GLoads:
+                    mostLoads = GLoads
+                    mostLoadConfig = e
+                if mostStores is None or mostStores < GStores:
+                    mostStores = GStores
+                    mostStoreConfig = e
+            
             print(f'Kernel: {self.Name} Best speedup: {bestConfig}; f(x) = {bestSpeedup}')
             print(f'Kernel: {self.Name} Worst speedup: {worstConfig}; f(x) = {worstSpeedup}')
             print(f'Kernel: {self.Name} Least energy: {bestEnergyConfig}; f(x) = {bestImprov}')
             print(f'Kernel: {self.Name} Most energy: {worstEnergyConfig}; f(x) = {worstImprov}')
+
+            print(f'Kernel: {self.Name} Least loads: {leastLoadConfig}; f(x) = {leastLoads}')
+            print(f'Kernel: {self.Name} Most loads: {mostLoadConfig}; f(x) = {mostLoads}')
+            print(f'Kernel: {self.Name} Least stores: {leastStoreConfig}; f(x) = {leastStores}')
+            print(f'Kernel: {self.Name} Most stores: {mostStoreConfig}; f(x) = {mostStores}')
 
         optimize(self, **kwargs)
 
@@ -362,8 +400,8 @@ class Kernel:
             db.setMetadata(mData)
 
             if not (self.getDefaultKey() in db):
-                Valid, SStats, DStats, Duration, Energy = self.sample()
-                db.Add(self.getDefaultKey(), [SStats], DStats, [Duration], [Energy], Valid)
+                Valid, SStats, DStats, Duration, Energy, GLoads, GStores = self.sample()
+                db.Add(self.getDefaultKey(), [SStats], DStats, [Duration], [Energy], [GLoads], [GStores], Valid)
 
             pending = optSamples + initSamples
 
@@ -381,12 +419,14 @@ class Kernel:
                 print("=================================================")
 
                 key = self.getConfigKey(config)
-                Valid, SStats, DStats, Duration, Energy = (0, -1, -1, 1, 1)
+                Valid, SStats, DStats, Duration, Energy, GLoads, GStores = (0, -1, -1, 1, 1, -1, -1)
                 if not (key in db):
-                    Valid, SStats, DStats, Duration, Energy = self.sample(Tries=5, **config)
-                db.Add(key, [SStats], DStats, [Duration], [Energy], Valid)
+                    Valid, SStats, DStats, Duration, Energy, GLoads, GStores = self.sample(Tries=5, **config)
+                db.Add(key, [SStats], DStats, [Duration], [Energy],[GLoads], [GStores], Valid)
                 Speedup = db.Speedup(key)
                 EnergyGain = db.EnergyImprov(key)
+                LoadRatio = db.LoadRatio(key)
+                StoreRatio = db.StoreRatio(key)
                 
                 if(Speedup >= 1.05 or EnergyGain >= 1): 
                     row_data = {**config, 'Speedup':Speedup, 'Energy_Improvment': EnergyGain}
@@ -396,7 +436,8 @@ class Kernel:
                 try:
                     # Update the optimizer with the evaluation results.
                     # Energy - Delay product - EnergyGain * Speedup
-                    optimizer.register(params = NextPoint, target = EnergyGain * Speedup)
+                    #optimizer.register(params = NextPoint, target = EnergyGain * Speedup)
+                    optimizer.register(params = NextPoint, target = LoadRatio * StoreRatio)
                     #optimizer.register(params = NextPoint, target = Speedup)
                 except:
                     assert False, 'optimizer error'
@@ -407,6 +448,7 @@ class Kernel:
 
         optimize(self, **kwargs)
 
+    # returns isValid, SStats, DStats, execTime, execEnergy, gLoads, gStores
     def sample(self, **kwargs):
         Tries = kwargs.pop('Tries', 5)
         deviceID = kwargs.get('deviceID', 0)
@@ -423,46 +465,79 @@ class Kernel:
             SStats = StaticStats[self.Name]
             if NumThreads is not None:
                 if ( SStats[0] * NumThreads > self.Profiler.MaxRegBlock ):
-                    return False, None, None, None, None
+                    return False, None, None, None, None, None, None
             if ( SStats[1] > self.Profiler.MaxSharedMemBlock ) :
-                return False, None, None, None, None
+                return False, None, None, None, None, None, None
 
         DStats = list()
-        res = self.execute(NumThreads, NumTeams, maxIters=Tries)
+        res, GLoads, GStores = self.execute(NumThreads, NumTeams, maxIters=Tries)
         if len(res) == 0:
             end = time.time()
             #end energy here
             end_energy = nvmlEnergy(device_handle)
-            return False, None, None, None, None
+            return False, None, None, None, None, None, None
 
         DStats += res
-        stats = np.array(DStats)[:,-1]
+        #stats = np.array(DStats)[:,-3]
         end = time.time()
         #end energy here
         end_energy = nvmlEnergy(device_handle)
 
-        return True, SStats, DStats, end-start, end_energy-start_energy
+        return True, SStats, DStats, end-start, end_energy-start_energy, GLoads, GStores
 
     def execute(self, NumThreads=None, NumTeams=None, maxIters = 9,
                 keepMaxTeam=True, dropSingleTeams=False):
+        #TODO: replace reference to nvprof in command()
         cmd = self.Replayer.command(NumThreads, NumTeams).format(kernel_name=f'{self.HashName}')
         env = self.Replayer.env()
-        cmd = self.Profiler.command().format(executable=cmd, output=f'{self.HashName}.csv')
-        env += ' ' + self.Profiler.env()
+        
+        #cmd = self.Profiler.command().format(executable=cmd, output=f'{self.HashName}.csv')
+        #env += ' ' + self.Profiler.env()
         results = []
+        #print("MaxIters ", maxIters)
         for i in range (0, maxIters):
-            ret, stdout, stderr = execute_command(env + 'timeout 180s ' + cmd,
+            ret, stdout, stderr = execute_command(env + ' timeout 180s ' + cmd,
                     capture_output=True, cwd=os.getcwd(),
                     shell=True, ContinueOnFailure=True)
+            #print("Return value ", ret)
+            #print("\n\nStdOut\n", stdout)
+            #print("\n\nStdErr\n", stderr)
             if ret != 0:
                 return list()
             #print(os.getcwd())
-            #print(self.HashName)
-            kernelDescr = self.Profiler.parse(f'{self.HashName}.csv',
+            
+            #print("Reading from ", self.HashName)
+             
+            #kernelDescr = self.Profiler.parse(f'{self.HashName}.csv',
+            kernelDescr = self.Profiler.parse('kernel_activities.csv',
                                               keepMaxTeam,
                                               dropSingleTeams)[self.Name]
             results.append(list(kernelDescr.values()))
-        return results
+            
+            #print(results)
+
+            # grep profiling stats 
+            global_loads = None
+            global_stores = None
+
+            # Pattern for matching the specific stats
+            load_pattern = r'\|\|NVMetrics\|\| global_load_requests: (\d+\.\d+)'
+            store_pattern = r'\|\|NVMetrics\|\| global_store_requests: (\d+\.\d+)'
+    
+            load_match = re.search(load_pattern, stdout)
+            store_match = re.search(store_pattern, stdout)
+    
+            if load_match:
+                global_loads = float(load_match.group(1))
+    
+            if store_match:
+                global_stores = float(store_match.group(1))
+           
+            #print(global_loads, global_stores) 
+            #results.append(global_loads)
+            #results.append(global_stores)
+
+        return results, global_loads, global_stores
 
     def setOrigDescr(self, Regs, SMem, NumTeams, NumThreads, ExecTime):
         self.NumRegs = Regs
@@ -479,6 +554,7 @@ class Kernel:
         state = self.__dict__.copy()
         # Assuming Profiler can be converted to and from a dict for serialization purposes.
         # Modify or remove this line if Profiler doesn't need special handling.
+        #TODO: replace with CUPTI
         state['Profiler'] = self.Profiler.to_dict() if hasattr(self.Profiler, 'to_dict') else None
         # Assume Replayer can be fully reconstructed from other attributes, so we don't serialize it.
         del state['Replayer']
@@ -708,6 +784,7 @@ class BaseBenchmark(ABC):
         env='OMP_TARGET_OFFLOAD=mandatory LIBOMPTARGET_NEXTGEN_PLUGINS=1' + self.env()
         command = self.command()
         if Record:
+            #TODO: replace command()
             command = self.recorder.command().format(executable=command)
             env += ' '  + self.recorder.env()
         else:
@@ -715,20 +792,22 @@ class BaseBenchmark(ABC):
 
         if Profile:
             csvFile=self.executable.replace('/', '_')
-            command = self.Device.command().format(executable=command, output=f'{csvFile}.csv')
+            print("csvFile Name: ", csvFile)
+            #command = self.Device.command().format(executable=command, output=f'{csvFile}.csv')
+            command = self.Device.command().format(executable=command)
             env += ' ' + self.Device.env()
 
         #print(env + ' ' + command)
         ret, stdout, stderr = execute_command(env + ' ' + command, capture_output=True, cwd=os.getcwd(), shell=True, check=False)
-        #print("NEW ret: " , ret, "\n")
-        #print("NEW stdout: ", stdout, "\n")
-        #print("NEW stderr: ", stderr, "\nEND\n")
+        print("NEW ret: " , ret, "\n")
+        print("NEW stdout: ", stdout, "\n")
+        print("NEW stderr: ", stderr, "\nEND\n")
         application_time = self.getApplicationTime(stdout)
 
         if Profile:
             csvFile=self.executable.replace('/', '_')
-            #print("Reading csvfile: ", csvFile)
-            kernelDescr = self.Device.parse(f'{csvFile}.csv',
+            print("Reading csvfile: ", csvFile)
+            kernelDescr = self.Device.parse('kernel_activities.csv',
                                             keepMaxTeam=True, dropSingleTeams=True)
 
         if not Record:
@@ -783,7 +862,6 @@ class BaseBenchmark(ABC):
     def name(self):
         return type(self).__name__
 
-    #TODO: add bEnergy, rEnergy (check if appEnergy is possible)
     def register_variant(self, vName, bTime, rTime, aTime, bEnergy, rEnergy, kernels): 
         self.versions[vName] = BenchmarkExecution(vName, bTime, rTime, aTime, bEnergy, rEnergy, self.executableDir, kernels)
 

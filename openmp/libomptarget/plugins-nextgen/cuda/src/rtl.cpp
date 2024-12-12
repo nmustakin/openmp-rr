@@ -21,10 +21,23 @@
 #include "GlobalHandler.h"
 #include "PluginInterface.h"
 #include <nv_metrics.h>
+#include <cupti.h>
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Frontend/OpenMP/OMPConstants.h"
 #include "llvm/Frontend/OpenMP/OMPGridValues.h"
 #include "llvm/Support/Error.h"
+
+#define CUPTI_CHECK(ans) { cuptiAssert((ans), __FILE__, __LINE__); }
+inline void cuptiAssert(CUptiResult code, const char *file, int line, bool abort=true)
+{
+   if (code != CUPTI_SUCCESS)
+   {
+       const char *errstr;
+       cuptiGetResultString(code, &errstr);
+       fprintf(stderr,"CUPTI: %s at %s:%d\n", errstr, file, line);
+       if (abort) exit(code);
+   }
+}
 
 namespace llvm {
 namespace omp {
@@ -920,6 +933,83 @@ private:
   } ComputeCapability;
 };
 
+static FILE *fp = NULL;
+
+void initializeFile() {
+  if (fp == NULL) {
+    fp = fopen("kernel_activities.csv", "a+");
+    fseek(fp, 0, SEEK_END);
+    if (ftell(fp) == 0) {
+      fprintf(fp, "\"Start\",\"Duration\",\"Grid X\",\"Grid Y\",\"Grid Z\","
+                  "\"Block X\",\"Block Y\",\"Block Z\",\"Registers Per Thread\","
+                  "\"Static SMem\",\"Dynamic SMem\",\"Size\",\"Throughput\","
+                  "\"SrcMemType\",\"DstMemType\",\"Device\",\"Context\",\"Stream\","
+                  "\"Name\",\"Correlation_ID\"\n");
+    }
+  }
+}
+
+void finalizeFile() {
+    if (fp != NULL) {
+        fclose(fp);
+        fp = NULL;
+    }
+}
+
+void CUPTIAPI bufferRequested(uint8_t **buffer, size_t *size, size_t *maxNumRecords) {
+  uint8_t *bfr = (uint8_t *)malloc(10 * 1024 * 1024);  // Adjust size as needed
+  *buffer = bfr;
+  *size = 10 * 1024 * 1024;
+  *maxNumRecords = 0;
+}
+
+void CUPTIAPI bufferCompleted(CUcontext ctx, uint32_t streamId,
+                              uint8_t *buffer, size_t size, size_t validSize) {
+  if (fp == NULL) {
+        initializeFile();  // Ensure the file is opened
+  }
+  CUptiResult status;
+  CUpti_Activity *record = NULL;
+  do {
+    status = cuptiActivityGetNextRecord(buffer, validSize, &record);
+    if (status == CUPTI_SUCCESS && record != NULL) {
+      if (record->kind == CUPTI_ACTIVITY_KIND_KERNEL) {
+        CUpti_ActivityKernel9 *kernel = (CUpti_ActivityKernel9 *)record;
+        fprintf(fp, "%lu,NA,%u,%u,%u,%u,%u,%u,%u,%d,%d,NA,NA,NA,NA,%u,%u,%u,%s,%u\n",
+                kernel->start, /*Duration*/ kernel->gridX, kernel->gridY,
+                kernel->gridZ, kernel->blockX, kernel->blockY, kernel->blockZ,
+                kernel->registersPerThread, kernel->staticSharedMemory,
+                kernel->dynamicSharedMemory, /*Size*//*Throughput*//*SrcMemType*/
+                /*DstMemType*/ kernel->deviceId, kernel->contextId,
+                kernel->streamId, kernel->name, kernel->correlationId);
+      }
+      
+      else if (record-> kind == CUPTI_ACTIVITY_KIND_MEMCPY){
+        CUpti_ActivityMemcpy *memcpy = (CUpti_ActivityMemcpy *)record;
+        if(memcpy == NULL){
+          fprintf(stderr, "NULL pointer for memcpy\n"); 
+        }
+        fprintf(fp, "%lu,%lu,NA,NA,NA,NA,NA,NA,NA,NA,NA,%llu,%f,%d,%d,%u,%u,%u,NA,%u\n", 
+              memcpy->start, memcpy->end - memcpy->start, /*memcpy->gridX, memcpy->gridY, 
+              memcpy->gridZ, memcpy->blockX, memcpy->blockY, memcpy->blockZ,
+              memcpy->registersPerThread ,memcpy->staticSharedMemory,
+              memcpy->dynamicSharedMemory,*/  
+              memcpy->bytes, (double)memcpy->bytes / (memcpy->end - memcpy->start) * 1e9,
+              memcpy->srcKind, memcpy->dstKind, memcpy->deviceId, memcpy->contextId, 
+              memcpy->streamId, /*memcpy->name,*/ memcpy->correlationId); 
+      }
+    }
+    else{
+      const char *errstr;
+      cuptiGetResultString(status, &errstr);
+      fprintf(stderr, "Error getting next record: %s\n", errstr);
+    }
+  } while (status == CUPTI_SUCCESS);
+  free(buffer);
+}
+
+
+
 Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
                                uint32_t NumThreads, uint64_t NumBlocks,
                                uint32_t DynamicMemorySize,
@@ -931,26 +1021,57 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   if (!Stream)
     return Plugin::error("Failure to get stream");
 
-  
-  std::vector<std::string> metrics = {
-      "l1tex__t_requests_pipe_lsu_mem_global_op_ld.sum",
-      "l1tex__t_requests_pipe_lsu_mem_global_op_st.sum"};
+  CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMCPY));
+  CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMSET));
 
+  CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_KERNEL));
+ 
+   // Setup metrics
+  std::vector<std::string> MetricNames = {
+    "achieved_occupancy",
+    "branch_efficiency",
+    "dram_read_transactions",
+    "dram_write_transactions",
+    "global_load_requests",
+    "global_store_requests",
+    "local_load_requests",
+    "local_store_requests"
+  };
+
+  std::vector<std::string> MetricIDs = {
+    "sm__warps_active.avg.pct_of_peak_sustained_active",
+    "smsp__sass_average_branch_targets_threads_uniform.pct",
+    "dram__sectors_read.sum",
+    "dram__sectors_write.sum",
+    "l1tex__t_requests_pipe_lsu_mem_global_op_ld.sum",
+    "l1tex__t_requests_pipe_lsu_mem_global_op_st.sum",
+    "l1tex__t_requests_pipe_lsu_mem_local_op_ld.sum",
+    "l1tex__t_requests_pipe_lsu_mem_local_op_st.sum"
+  };
   // Start measurement
-  nvmetrics::measureMetricsStart(metrics);
+  nvmetrics::measureMetricsStart(MetricIDs);
 
+  CUPTI_CHECK(cuptiActivityRegisterCallbacks(bufferRequested, bufferCompleted));
+  
   CUresult Res =
       cuLaunchKernel(Func, NumBlocks, /* gridDimY */ 1,
                      /* gridDimZ */ 1, NumThreads,
                      /* blockDimY */ 1, /* blockDimZ */ 1, DynamicMemorySize,
                      Stream, (void **)KernelArgs, nullptr);
+
   // Stop measurement
-  std::vector<double> result = nvmetrics::measureMetricsStop();
-  //assert(metrics.size() == result.size());
+  std::vector<double> MetricResults = nvmetrics::measureMetricsStop();
+  assert(MetricIDs.size() == MetricResults.size());
+  CUPTI_CHECK(cuptiActivityFlushAll(0));
+  
   // Print result of the measurement
-  for (int i = 0; i < result.size(); i++) {
-    printf("%s: %lf\n", metrics[i].c_str(), result[i]); 
-  } 
+  for (int i = 0; i < MetricResults.size(); i++) {
+    printf("||NVMetrics|| %s: %lf \n", MetricNames[i].c_str(), MetricResults[i]);
+  }
+
+  //printf("Error at Finalize File\n");
+  finalizeFile();
+
   return Plugin::check(Res, "Error in cuLaunchKernel for '%s': %s", getName());
 }
 

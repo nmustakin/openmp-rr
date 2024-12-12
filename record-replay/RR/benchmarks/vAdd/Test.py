@@ -23,7 +23,7 @@ class TEST(Bench.MakeBenchmark):
         if fn is None:
             return super().build({ 'LEFLAGS' : Device.GetCompileOptions(self.Device) })
 
-        leOptions = Device.GetCompileOptions(self.Device) + f' -mllvm --bo-omp-autotune={fn}'
+        leOptions = Device.GetCompileOptions(self.Device) + f'-lcupti -lnv_metrics -mllvm --bo-omp-autotune={fn}'
         return super().build({'LEFLAGS' : leOptions}, useCase)
 
     def clean(self):

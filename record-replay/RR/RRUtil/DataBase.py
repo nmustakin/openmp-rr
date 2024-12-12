@@ -10,6 +10,8 @@ class DB:
         self.MetaData = dict()
         self.DefaultExecTime = None
         self.DefaultExecEnergy = None
+        self.DefaultLoads = None
+        self.DefaultStores = None
         self.Default = defaultKey
 
         Data = { 'MetaData' : {} , 'Stats' : {} }
@@ -62,6 +64,14 @@ class DB:
         if self.Default in self.Data:
             self.DefaultExecEnergy = self.Energy(self.Default)
     
+    def BaselineLoads(self):
+        if self.Default in self.Data:
+            self.DefaultLoads = self.GLoads(self.Default)
+    
+    def BaselineStores(self):
+        if self.Default in self.Data:
+            self.DefaultStores = self.GStores(self.Default)
+    
     def __contains__(self, key):
         return key in self.Data
 
@@ -79,7 +89,7 @@ class DB:
 
     def Energy(self, key):
         if key not in self.Data:
-            raise RuntimeError(f"Key {key} not in Data, cannot compute speedup")
+            raise RuntimeError(f"Key {key} not in Data, cannot compute Energy")
 
         #We ground performance gain
         if not self.Data[key]['valid']:
@@ -90,6 +100,32 @@ class DB:
         energy = np.array(self.Data[key]['energy']).mean()
         return energy
 
+    def GLoads(self, key):
+        if key not in self.Data:
+            raise RuntimeError(f"Key {key} not in Data, cannot compute GLoads")
+
+        #We ground performance gain
+        if not self.Data[key]['valid']:
+            return 1E12
+
+        #print("------IN GLOADS------", self.Data[key]['energy'])
+        #energy = np.array([ v[-1] for v in self.Data[key]['energy']]).mean()
+        gLoads = np.array(self.Data[key]['gloads']).mean()
+        return gLoads
+    
+    def GStores(self, key):
+        if key not in self.Data:
+            raise RuntimeError(f"Key {key} not in Data, cannot compute GStores")
+
+        #We ground performance gain
+        if not self.Data[key]['valid']:
+            return 1E12
+
+        #print("------IN GLOADS------", self.Data[key]['energy'])
+        #energy = np.array([ v[-1] for v in self.Data[key]['energy']]).mean()
+        gStores = np.array(self.Data[key]['gstores']).mean()
+        return gStores
+    
     def Speedup(self, key):
         if isinstance(self.DefaultExecTime, type(None)):
             self.Baseline()
@@ -113,10 +149,10 @@ class DB:
             self.BaselineEnergy()
 
         if isinstance(self.DefaultExecEnergy, type(None)):
-            raise RuntimeError(f"'Baseline not in Data, cannot compute speedup")
+            raise RuntimeError(f"'Baseline not in Data, cannot compute EnergyImprov")
 
         if key not in self.Data:
-            raise RuntimeError(f"Key {key} not in Data, cannot compute speedup")
+            raise RuntimeError(f"Key {key} not in Data, cannot compute EnergyImprov")
 
         #We ground performance gain
         if not self.Data[key]['valid']:
@@ -125,6 +161,42 @@ class DB:
         energy = self.Energy(key)
         improv = self.DefaultExecEnergy / energy
         return improv
+
+    def LoadRatio(self, key):
+        if isinstance(self.DefaultLoads, type(None)):
+            self.BaselineLoads()
+
+        if isinstance(self.DefaultLoads, type(None)):
+            raise RuntimeError(f"'Baseline not in Data, cannot compute LoadRatio")
+
+        if key not in self.Data:
+            raise RuntimeError(f"Key {key} not in Data, cannot compute LoadRatio")
+
+        #We ground performance gain
+        if not self.Data[key]['valid']:
+            return 0.01
+
+        gloads = self.GLoads(key)
+        ld_ratio = self.DefaultLoads / gloads
+        return ld_ratio
+
+    def StoreRatio(self, key):
+        if isinstance(self.DefaultStores, type(None)):
+            self.BaselineStores()
+
+        if isinstance(self.DefaultStores, type(None)):
+            raise RuntimeError(f"'Baseline not in Data, cannot compute StoreRatio")
+
+        if key not in self.Data:
+            raise RuntimeError(f"Key {key} not in Data, cannot compute StoreRatio")
+
+        #We ground performance gain
+        if not self.Data[key]['valid']:
+            return 0.01
+
+        gstores = self.GStores(key)
+        st_ratio = self.DefaultStores / gstores
+        return st_ratio
 
     def GetSpeedUps(self):
         X = list()
@@ -170,13 +242,15 @@ class DB:
 
     # Add key in database, if key exists increase counter
     # and ignore parameters
-    def Add(self, key, static, dynamic, duration, energy, Valid):
+    def Add(self, key, static, dynamic, duration, energy, gloads, gstores, Valid):
         if key not  in self.Data:
             self.Data[key] = dict()
             self.Data[key]['static'] = list()
             self.Data[key]['dynamic'] = list()
             self.Data[key]['duration'] = list()
             self.Data[key]['energy'] = list()
+            self.Data[key]['gloads'] = list()
+            self.Data[key]['gstores'] = list()
             self.Data[key]['count'] = 1
             self.Data[key]['valid'] = Valid
             if Valid:
@@ -184,6 +258,8 @@ class DB:
               self.Data[key]['dynamic'] += dynamic
               self.Data[key]['duration'] += duration
               self.Data[key]['energy'] += energy
+              self.Data[key]['gloads'] += gloads
+              self.Data[key]['gstores'] += gstores
         else:
             self.Data[key]['count'] += 1
 

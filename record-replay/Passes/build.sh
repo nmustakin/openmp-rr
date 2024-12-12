@@ -8,7 +8,7 @@ echo $host
 cd build/${host}
 
 cmake \
-    -DLT_LLVM_INSTALL_DIR=/data2/nmn/record-replay/build/ \
+    -DLT_LLVM_INSTALL_DIR=/data2/nmn/RR-back/openmp-rr/build/ \
     -DCMAKE_C_COMPILER=gcc \
     -DCMAKE_CXX_COMPILER=g++ \
     ../../

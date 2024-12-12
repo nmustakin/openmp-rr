@@ -2,7 +2,7 @@ LECPP?=clang++
 LECC?=clang
 LEOPT ?=-O3
 #LEFLAGS=-fopenmp -fopenmp-targets=amdgcn-amd-amdhsa -Xopenmp-target=amdgcn-amd-amdhsa -march=gfx90a -fopenmp-offload-mandatory -foffload-lto -Wl,--embed-bitcode
-LEFLAGS ?=-fopenmp -fopenmp-targets=nvptx64 -Xopenmp-target=nvptx64 -march=sm_70 -fopenmp-offload-mandatory -foffload-lto -Wl,--embed-bitcode
+LEFLAGS ?=-lcupti -lnv_metrics -fopenmp -fopenmp-targets=nvptx64 -Xopenmp-target=nvptx64 -march=sm_75 -fopenmp-offload-mandatory -foffload-lto -Wl,--embed-bitcode -I/data2/nmn/nvmetrics/lib -L/data2/nmn/nvmetrics/build/lib -I/usr/local/cuda-12.3/include/ -L/usr/local/cuda-12.3/lib64/
 LELDFLAGS?=-Wl,--embed-bitcode
 BUILDDIR?=./
 EXEDIR?=${BUILDDIR}
