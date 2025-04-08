@@ -944,7 +944,8 @@ void initializeFile() {
                   "\"Block X\",\"Block Y\",\"Block Z\",\"Registers Per Thread\","
                   "\"Static SMem\",\"Dynamic SMem\",\"Size\",\"Throughput\","
                   "\"SrcMemType\",\"DstMemType\",\"Device\",\"Context\",\"Stream\","
-                  "\"Name\",\"Correlation_ID\"\n");
+                  "\"Name\",\"Correlation_ID\",\"GLoads\",\"GStores\",\"Occupancy\","
+                  "\"Branch Efficiency\"\n");
     }
   }
 }
@@ -975,28 +976,13 @@ void CUPTIAPI bufferCompleted(CUcontext ctx, uint32_t streamId,
     if (status == CUPTI_SUCCESS && record != NULL) {
       if (record->kind == CUPTI_ACTIVITY_KIND_KERNEL) {
         CUpti_ActivityKernel9 *kernel = (CUpti_ActivityKernel9 *)record;
-        fprintf(fp, "%lu,NA,%u,%u,%u,%u,%u,%u,%u,%d,%d,NA,NA,NA,NA,%u,%u,%u,%s,%u\n",
-                kernel->start, /*Duration*/ kernel->gridX, kernel->gridY,
+        fprintf(fp, "%lu,%lu,%u,%u,%u,%u,%u,%u,%u,%d,%d,NA,NA,NA,NA,%u,%u,%u,%s,%u",
+                kernel->start, kernel->end - kernel->start, kernel->gridX, kernel->gridY,
                 kernel->gridZ, kernel->blockX, kernel->blockY, kernel->blockZ,
                 kernel->registersPerThread, kernel->staticSharedMemory,
                 kernel->dynamicSharedMemory, /*Size*//*Throughput*//*SrcMemType*/
                 /*DstMemType*/ kernel->deviceId, kernel->contextId,
                 kernel->streamId, kernel->name, kernel->correlationId);
-      }
-      
-      else if (record-> kind == CUPTI_ACTIVITY_KIND_MEMCPY){
-        CUpti_ActivityMemcpy *memcpy = (CUpti_ActivityMemcpy *)record;
-        if(memcpy == NULL){
-          fprintf(stderr, "NULL pointer for memcpy\n"); 
-        }
-        fprintf(fp, "%lu,%lu,NA,NA,NA,NA,NA,NA,NA,NA,NA,%llu,%f,%d,%d,%u,%u,%u,NA,%u\n", 
-              memcpy->start, memcpy->end - memcpy->start, /*memcpy->gridX, memcpy->gridY, 
-              memcpy->gridZ, memcpy->blockX, memcpy->blockY, memcpy->blockZ,
-              memcpy->registersPerThread ,memcpy->staticSharedMemory,
-              memcpy->dynamicSharedMemory,*/  
-              memcpy->bytes, (double)memcpy->bytes / (memcpy->end - memcpy->start) * 1e9,
-              memcpy->srcKind, memcpy->dstKind, memcpy->deviceId, memcpy->contextId, 
-              memcpy->streamId, /*memcpy->name,*/ memcpy->correlationId); 
       }
     }
     else{
@@ -1021,8 +1007,8 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   if (!Stream)
     return Plugin::error("Failure to get stream");
 
-  CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMCPY));
-  CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMSET));
+  //CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMCPY));
+  //CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMSET));
 
   CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_KERNEL));
  
@@ -1065,9 +1051,11 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   CUPTI_CHECK(cuptiActivityFlushAll(0));
   
   // Print result of the measurement
-  for (int i = 0; i < MetricResults.size(); i++) {
+  /*for (int i = 0; i < MetricResults.size(); i++) {
     printf("||NVMetrics|| %s: %lf \n", MetricNames[i].c_str(), MetricResults[i]);
-  }
+  }*/
+  fprintf(fp, ",%lf,%lf,%lf,%lf\n", MetricResults[4], MetricResults[5],
+                                    MetricResults[0], MetricResults[1]);
 
   //printf("Error at Finalize File\n");
   finalizeFile();

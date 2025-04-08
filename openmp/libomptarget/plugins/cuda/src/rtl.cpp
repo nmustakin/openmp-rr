@@ -1281,7 +1281,7 @@ public:
     // Print result of the measurement
     for (int i = 0; i < MetricResults.size(); i++) {
       printf("||NVMetrics|| %s: %lf \n", MetricNames[i].c_str(), MetricResults[i]);
-    }
+    } 
 
     return OFFLOAD_SUCCESS;
   }
