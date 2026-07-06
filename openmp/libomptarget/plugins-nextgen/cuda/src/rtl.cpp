@@ -1050,6 +1050,9 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   assert(MetricIDs.size() == MetricResults.size());
   CUPTI_CHECK(cuptiActivityFlushAll(0));
   
+  if (fp == NULL)
+    initializeFile();
+
   // Print result of the measurement
   /*for (int i = 0; i < MetricResults.size(); i++) {
     printf("||NVMetrics|| %s: %lf \n", MetricNames[i].c_str(), MetricResults[i]);

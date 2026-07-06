@@ -168,12 +168,20 @@ class NVIDIA(metaclass=DeviceSingleton):
         #print("df columns: \n", df.columns)
         #metric = df.Duration[0]
         roi_columns = ['Name', 'Device', 'Grid X', 'Block X', 'Registers Per Thread', 'Static SMem', 'Dynamic SMem', 'Duration']
+        for metric_column in ['GLoads', 'GStores', 'Occupancy', 'Branch Efficiency']:
+            if metric_column in df.columns:
+                roi_columns.append(metric_column)
         Types = { 'Grid X' : 'int32',
                   'Block X' : 'int32',
                   'Registers Per Thread' :'int32',
                   'Static SMem' : 'float32',
                   'Dynamic SMem' : 'float32',
-                  'Duration' : 'float32' }
+                  'Duration' : 'float32',
+                  'GLoads' : 'float32',
+                  'GStores' : 'float32',
+                  'Occupancy' : 'float32',
+                  'Branch Efficiency' : 'float32' }
+        Types = {k: v for k, v in Types.items() if k in df.columns}
         df = df[df.Name.notna()]
         df = df[df.Name.str.contains('__omp_offloading')]
         df = df[roi_columns]
