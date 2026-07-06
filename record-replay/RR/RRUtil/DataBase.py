@@ -177,6 +177,8 @@ class DB:
             return 0.01
 
         gloads = self.GLoads(key)
+        if gloads <= 0:
+            return 0.01
         ld_ratio = self.DefaultLoads / gloads
         return ld_ratio
 
@@ -195,6 +197,8 @@ class DB:
             return 0.01
 
         gstores = self.GStores(key)
+        if gstores <= 0:
+            return 0.01
         st_ratio = self.DefaultStores / gstores
         return st_ratio
 
@@ -240,6 +244,17 @@ class DB:
             configs.append(key)
         return configs, X, Y
 
+
+    @staticmethod
+    def _flatten_metric(values):
+        flat = []
+        for value in values:
+            if isinstance(value, list):
+                flat.extend(value)
+            else:
+                flat.append(value)
+        return [0.0 if value is None else value for value in flat]
+
     # Add key in database, if key exists increase counter
     # and ignore parameters
     def Add(self, key, static, dynamic, duration, energy, gloads, gstores, Valid):
@@ -258,8 +273,8 @@ class DB:
               self.Data[key]['dynamic'] += dynamic
               self.Data[key]['duration'] += duration
               self.Data[key]['energy'] += energy
-              self.Data[key]['gloads'] += gloads
-              self.Data[key]['gstores'] += gstores
+              self.Data[key]['gloads'] += self._flatten_metric(gloads)
+              self.Data[key]['gstores'] += self._flatten_metric(gstores)
         else:
             self.Data[key]['count'] += 1
 

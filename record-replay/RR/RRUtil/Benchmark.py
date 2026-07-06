@@ -268,18 +268,21 @@ class Kernel:
                     worstImprov = energy_improv
                     worstEnergyConfig = e
 
-                if leastLoads is None or leastLoads > GLoads:
-                    leastLoads = GLoads
+                meanGLoads = np.array(GLoads).mean() if isinstance(GLoads, list) else GLoads
+                meanGStores = np.array(GStores).mean() if isinstance(GStores, list) else GStores
+
+                if leastLoads is None or leastLoads > meanGLoads:
+                    leastLoads = meanGLoads
                     leastLoadConfig = e
-                if leastStores is None or leastStores > GStores:
-                    leastStores = GStores
+                if leastStores is None or leastStores > meanGStores:
+                    leastStores = meanGStores
                     leastStoreConfig = e
 
-                if mostLoads is None or mostLoads < GLoads:
-                    mostLoads = GLoads
+                if mostLoads is None or mostLoads < meanGLoads:
+                    mostLoads = meanGLoads
                     mostLoadConfig = e
-                if mostStores is None or mostStores < GStores:
-                    mostStores = GStores
+                if mostStores is None or mostStores < meanGStores:
+                    mostStores = meanGStores
                     mostStoreConfig = e
             
             print(f'Kernel: {self.Name} Best speedup: {bestConfig}; f(x) = {bestSpeedup}')
@@ -371,6 +374,7 @@ class Kernel:
             initSamples = kwargs.get('initSamples', 3)
             optSamples = kwargs.get('optSamples', 10)
             deviceID = kwargs.get('device', 0)
+            objective = kwargs.get('objective', 'memory')
             #print(initSamples, optSamples)
 
             pBounds = self.getBounds(**kwargs)
@@ -437,12 +441,19 @@ class Kernel:
                     # Update the optimizer with the evaluation results.
                     # Energy - Delay product - EnergyGain * Speedup
                     #optimizer.register(params = NextPoint, target = EnergyGain * Speedup)
-                    optimizer.register(params = NextPoint, target = LoadRatio * StoreRatio)
+                    targets = {
+                        'speedup': Speedup,
+                        'energy': EnergyGain,
+                        'loads': LoadRatio,
+                        'stores': StoreRatio,
+                        'memory': LoadRatio * StoreRatio,
+                    }
+                    optimizer.register(params = NextPoint, target = targets[objective])
                     #optimizer.register(params = NextPoint, target = Speedup)
                 except:
                     assert False, 'optimizer error'
 
-            print('Kernel: {} Best result: {}; f_energy(x) = {}.'.format(self.Name, optimizer.max['params'], optimizer.max['target']))
+            print('Kernel: {} Best result: {}; f_{}(x) = {}.'.format(self.Name, optimizer.max['params'], objective, optimizer.max['target']))
             df = pd.DataFrame(stats)
             df.to_csv(stats_file, index=False)
 
@@ -494,8 +505,11 @@ class Kernel:
         #cmd = self.Profiler.command().format(executable=cmd, output=f'{self.HashName}.csv')
         #env += ' ' + self.Profiler.env()
         results = []
+        global_loads = []
+        global_stores = []
         #print("MaxIters ", maxIters)
         for i in range (0, maxIters):
+            Path('kernel_activities.csv').unlink(missing_ok=True)
             ret, stdout, stderr = execute_command(env + ' timeout 180s ' + cmd,
                     capture_output=True, cwd=os.getcwd(),
                     shell=True, ContinueOnFailure=True)
@@ -512,30 +526,20 @@ class Kernel:
             kernelDescr = self.Profiler.parse('kernel_activities.csv',
                                               keepMaxTeam,
                                               dropSingleTeams)[self.Name]
+            global_loads.append(kernelDescr.pop('GLoads', None))
+            global_stores.append(kernelDescr.pop('GStores', None))
             results.append(list(kernelDescr.values()))
             
             #print(results)
 
-            # grep profiling stats 
-            global_loads = None
-            global_stores = None
-
-            # Pattern for matching the specific stats
-            load_pattern = r'\|\|NVMetrics\|\| global_load_requests: (\d+\.\d+)'
-            store_pattern = r'\|\|NVMetrics\|\| global_store_requests: (\d+\.\d+)'
-    
-            load_match = re.search(load_pattern, stdout)
-            store_match = re.search(store_pattern, stdout)
-    
-            if load_match:
-                global_loads = float(load_match.group(1))
-    
-            if store_match:
-                global_stores = float(store_match.group(1))
-           
-            #print(global_loads, global_stores) 
-            #results.append(global_loads)
-            #results.append(global_stores)
+            # The legacy CUDA plugin reports nvmetrics on stdout instead of the
+            # CUPTI activity CSV used by the nextgen plugin. Use stdout as a
+            # fallback so both plugins populate the same database fields.
+            if global_loads[-1] is None or global_stores[-1] is None:
+                load_match = re.search(r'\|\|NVMetrics\|\| global_load_requests: ([-+0-9.eE]+)', stdout)
+                store_match = re.search(r'\|\|NVMetrics\|\| global_store_requests: ([-+0-9.eE]+)', stdout)
+                global_loads[-1] = float(load_match.group(1)) if load_match else 0.0
+                global_stores[-1] = float(store_match.group(1)) if store_match else 0.0
 
         return results, global_loads, global_stores
 

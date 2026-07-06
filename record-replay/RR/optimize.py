@@ -68,6 +68,7 @@ def main():
     parser.add_argument('--scenario', dest='scenario', nargs='?', choices=['EM', 'EMM', 'BONN', 'BOMN'])
     parser.add_argument('--print-recorded-kernels', '-prk', dest='rkernel', action=argparse.BooleanOptionalAction, default=False, help='Print recorded kernels and their names')
     parser.add_argument('--summary', dest='summary', action=argparse.BooleanOptionalAction, default=False, help='Print recorded kernels and their names')
+    parser.add_argument('--objective', dest='objective', choices=['speedup', 'energy', 'loads', 'stores', 'memory'], default='memory', help='Bayesian optimization objective. memory maximizes the product of global-load and global-store reductions.')
     args = parser.parse_args()
     record = args.record
     kernel = args.kernel
@@ -119,6 +120,7 @@ def main():
             optParams[config] = True
         optParams['initSamples'] = initSteps
         optParams['optSamples'] = optSteps
+        optParams['objective'] = args.objective
 
     executeDir = Utilities.createDir(f'execute//{BENCHCLS.__name__}/{host}')
     resultsDir = Utilities.createDir(f'results/{BENCHCLS.__name__}/{host}')
