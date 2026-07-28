@@ -225,11 +225,12 @@ def main():
                 print()
                 print()
             elif stats:
-                print('Name:Speedup:NumTeams:NumThreads:MinTeams:MaxThreads')
+                print('Name:Speedup:EnergyImprovement:LoadRatio:StoreRatio:NumTeams:NumThreads:MinTeams:MaxThreads')
                 for k, v in bench.getKernels('record').items():
-                    c, speedup, options = v.Stats(**optParams)
-                    opts=':'.join( f'{k}={v}' for k,v in options.items() )
-                    print("{0}:{1}:{2}:{3}:{4}:{5}".format(v.Name, speedup,
+                    (_, speedup, energy_improvement, load_ratio, store_ratio,
+                     options) = v.Stats(**optParams)
+                    print("{0}:{1}:{2}:{3}:{4}:{5}:{6}:{7}:{8}".format(
+                      v.Name, speedup, energy_improvement, load_ratio, store_ratio,
                       options.get('NumTeams', -1),
                       options.get('NumThreads', -1),
                       options.get('MinTeams', -1),
@@ -238,7 +239,7 @@ def main():
                 best_configs = list()
 
                 for k, v in bench.getKernels('record').items():
-                    c, speedup, options = v.Stats(**optParams)
+                    _, _, _, _, _, options = v.Stats(**optParams)
                     options = device.transformConfig(options)
                     best_configs.append( { 'kernel' : v.Name, **options } )
 
@@ -296,4 +297,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -133,7 +133,7 @@ In the case of a nvidia system please install also 'python -m pip install pycuda
     python optimize.py -b benchmarks/vAdd/Test.py -d nvidia --scenario $SCENARIO --stats | column -t -s :
     ```
 
-    The variable `$SCENARIO` must be set. The column `line` indicates the source code line this kernel was defined. The columns Speedup indicates the speedup of this kernel and the columns `NumTeams, NumThreads, MinTeams, MaxThreads` indicate the discovered optimal parameters (`0|-1` reflect the default OpenMP value)
+    The variable `$SCENARIO` must be set. The `Speedup` column indicates the speedup of this kernel, and `EnergyImprovement` is the baseline energy divided by the optimal configuration's energy. `LoadRatio` and `StoreRatio` are the baseline global-memory operation counts divided by the counts for the optimal configuration, so values greater than one indicate an improvement or reduction. The columns `NumTeams, NumThreads, MinTeams, MaxThreads` indicate the discovered optimal parameters (`0|-1` reflect the default OpenMP value).
 
     In our system the following command:
     ```bash
@@ -142,8 +142,8 @@ In the case of a nvidia system please install also 'python -m pip install pycuda
 
     Outputs the following information:
     ```bash
-    Name                                             Speedup             NumTeams  NumThreads  MinTeams  MaxThreads
-    __omp_offloading_4d_84a6373d__Z6vecAddPdS_m_l16  1.0224369071371067  -1        928         -1        928
+    Name                                             Speedup             EnergyImprovement  LoadRatio  StoreRatio  NumTeams  NumThreads  MinTeams  MaxThreads
+    __omp_offloading_4d_84a6373d__Z6vecAddPdS_m_l16  1.0224369071371067  1.01               1.0        1.0         -1        928         -1        928
     ```
 
 5. The last step of the optimization process requires as to embed the optimal configuration back to the original application binary. To do so please issue the following command:

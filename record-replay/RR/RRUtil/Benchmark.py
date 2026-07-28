@@ -118,14 +118,14 @@ class Kernel:
     def Stats(self, **kwargs):
         configKey = self.getConfigKey(kwargs)
         db = DB(self.getDBName(**kwargs), self.getDefaultKey())
-        results = {}
-        Configs, X, Y = db.GetSpeedUps()
+        _, X, Y = db.GetSpeedUps()
         if len(Y) > 0:
-            index_min = min(range(len(Y)), key=Y.__getitem__)
             index_max = max(range(len(Y)), key=Y.__getitem__)
             bestConfig = X[index_max]
-            return configKey, Y[index_max], bestConfig
-        return configKey, -1, {}
+            bestKey = self.getConfigKey(bestConfig)
+            return (configKey, Y[index_max], db.EnergyImprov(bestKey),
+                    db.LoadRatio(bestKey), db.StoreRatio(bestKey), bestConfig)
+        return configKey, -1, -1, -1, -1, {}
 
     def BuildBest(self, **kwargs):
         configKey = self.getConfigKey(kwargs)
@@ -251,9 +251,10 @@ class Kernel:
 
                 speedup = db.Speedup(key)
                 energy_improv = db.EnergyImprov(key)
-                load_ratio = db.GLoads(key)
-                store_ratio = db.GStores(key)
-                print(f'{key} -> Speedup: {speedup}, Energy_Improv: {energy_improv}')
+                load_ratio = db.LoadRatio(key)
+                store_ratio = db.StoreRatio(key)
+                print(f'{key} -> Speedup: {speedup}, Energy_Improv: {energy_improv}, '
+                      f'Load_Ratio: {load_ratio}, Store_Ratio: {store_ratio}')
                 if bestSpeedup is None or bestSpeedup < speedup:
                     bestSpeedup = speedup
                     bestConfig = e
@@ -433,10 +434,14 @@ class Kernel:
                 StoreRatio = db.StoreRatio(key)
                 
                 if(Speedup >= 1.05 or EnergyGain >= 1): 
-                    row_data = {**config, 'Speedup':Speedup, 'Energy_Improvment': EnergyGain}
+                    row_data = {**config, 'Speedup': Speedup,
+                                'Energy_Improvment': EnergyGain,
+                                'Load_Ratio': LoadRatio,
+                                'Store_Ratio': StoreRatio}
                     stats.append(row_data)
 
-                print('{0} -> Speedup: {1} , EnergyImprov: {2}'.format(key, Speedup, EnergyGain))
+                print(f'{key} -> Speedup: {Speedup}, EnergyImprov: {EnergyGain}, '
+                      f'Load_Ratio: {LoadRatio}, Store_Ratio: {StoreRatio}')
                 try:
                     # Update the optimizer with the evaluation results.
                     # Energy - Delay product - EnergyGain * Speedup
@@ -509,7 +514,8 @@ class Kernel:
         global_stores = []
         #print("MaxIters ", maxIters)
         for i in range (0, maxIters):
-            Path('kernel_activities.csv').unlink(missing_ok=True)
+            activities_file = Path('kernel_activities.csv')
+            activities_file.unlink(missing_ok=True)
             ret, stdout, stderr = execute_command(env + ' timeout 180s ' + cmd,
                     capture_output=True, cwd=os.getcwd(),
                     shell=True, ContinueOnFailure=True)
@@ -517,15 +523,19 @@ class Kernel:
             #print("\n\nStdOut\n", stdout)
             #print("\n\nStdErr\n", stderr)
             if ret != 0:
-                return list()
+                activities_file.unlink(missing_ok=True)
+                return [], [], []
             #print(os.getcwd())
             
             #print("Reading from ", self.HashName)
              
             #kernelDescr = self.Profiler.parse(f'{self.HashName}.csv',
-            kernelDescr = self.Profiler.parse('kernel_activities.csv',
-                                              keepMaxTeam,
-                                              dropSingleTeams)[self.Name]
+            try:
+                kernelDescr = self.Profiler.parse(str(activities_file),
+                                                  keepMaxTeam,
+                                                  dropSingleTeams)[self.Name]
+            finally:
+                activities_file.unlink(missing_ok=True)
             global_loads.append(kernelDescr.pop('GLoads', None))
             global_stores.append(kernelDescr.pop('GStores', None))
             results.append(list(kernelDescr.values()))
@@ -923,4 +933,3 @@ class MakeBenchmark(BaseBenchmark):
 
 #There should be a better way to do this.
 validBenchmarks=[BaseBenchmark.__name__, MakeBenchmark.__name__]
-

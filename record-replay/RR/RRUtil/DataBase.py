@@ -1,5 +1,9 @@
 import json
+import os
 from pathlib import Path
+import tempfile
+import time
+import warnings
 import numpy as np
 
 class DB:
@@ -17,8 +21,17 @@ class DB:
         Data = { 'MetaData' : {} , 'Stats' : {} }
         if Path(self.fn).exists():
             #print("Json file: ", self.fn)
-            with open(self.fn, 'r') as fd:
-                Data = json.load(fd)
+            try:
+                with open(self.fn, 'r') as fd:
+                    Data = json.load(fd)
+            except json.JSONDecodeError as error:
+                corrupt_path = Path(
+                    f'{self.fn}.corrupt-{time.time_ns()}')
+                Path(self.fn).replace(corrupt_path)
+                warnings.warn(
+                    f'Optimization database {self.fn} is not valid JSON '
+                    f'({error}). It was moved to {corrupt_path}; starting a '
+                    'new database.', RuntimeWarning)
 
         self.Data = Data['Stats']
         self.MetaData = Data['MetaData']
@@ -30,8 +43,23 @@ class DB:
 
     def Update(self):
         Data = { 'MetaData' : self.MetaData , 'Stats' : self.Data }
-        with open(self.fn, 'w') as fd:
-            json.dump(Data, fd, indent = 6)
+        destination = Path(self.fn)
+        temporary_name = None
+        try:
+            # Write beside the database so os.replace remains atomic even when
+            # the execution directory is on a different filesystem.
+            with tempfile.NamedTemporaryFile(
+                    mode='w', dir=destination.parent,
+                    prefix=f'.{destination.name}.', suffix='.tmp',
+                    delete=False) as fd:
+                temporary_name = fd.name
+                json.dump(Data, fd, indent=6)
+                fd.flush()
+                os.fsync(fd.fileno())
+            os.replace(temporary_name, destination)
+        finally:
+            if temporary_name is not None:
+                Path(temporary_name).unlink(missing_ok=True)
 
     def getTotalSize(self):
         if not self.MetaData:

@@ -958,9 +958,9 @@ void finalizeFile() {
 }
 
 void CUPTIAPI bufferRequested(uint8_t **buffer, size_t *size, size_t *maxNumRecords) {
-  uint8_t *bfr = (uint8_t *)malloc(10 * 1024 * 1024);  // Adjust size as needed
+  uint8_t *bfr = (uint8_t *)malloc(16 * 1024 * 1024);  // Adjust size as needed
   *buffer = bfr;
-  *size = 10 * 1024 * 1024;
+  *size = 16 * 1024 * 1024;
   *maxNumRecords = 0;
 }
 
@@ -985,7 +985,7 @@ void CUPTIAPI bufferCompleted(CUcontext ctx, uint32_t streamId,
                 kernel->streamId, kernel->name, kernel->correlationId);
       }
     }
-    else{
+    else if (status != CUPTI_ERROR_MAX_LIMIT_REACHED) {
       const char *errstr;
       cuptiGetResultString(status, &errstr);
       fprintf(stderr, "Error getting next record: %s\n", errstr);
