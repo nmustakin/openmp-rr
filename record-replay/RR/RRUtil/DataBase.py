@@ -272,6 +272,25 @@ class DB:
             configs.append(key)
         return configs, X, Y
 
+    def GetExplorationStats(self):
+        """Return one summary row for every configuration in the database."""
+        rows = []
+        for key, values in self.Data.items():
+            rows.append({
+                'Configuration': key,
+                'Baseline': key == self.Default,
+                'Valid': values['valid'],
+                'Samples': values['count'],
+                'Duration': self.Duration(key),
+                'Energy': self.Energy(key),
+                'GLoads': self.GLoads(key),
+                'GStores': self.GStores(key),
+                'Speedup': self.Speedup(key),
+                'EnergyImprovement': self.EnergyImprov(key),
+                'LoadRatio': self.LoadRatio(key),
+                'StoreRatio': self.StoreRatio(key),
+            })
+        return rows
 
     @staticmethod
     def _flatten_metric(values):

@@ -131,6 +131,10 @@ class Kernel:
                     db.LoadRatio(bestKey), db.StoreRatio(bestKey), bestConfig)
         return configKey, -1, -1, -1, -1, {}
 
+    def ExplorationStats(self, **kwargs):
+        db = DB(self.getDBName(**kwargs), self.getDefaultKey())
+        return db.GetExplorationStats()
+        
     def BuildBest(self, **kwargs):
         configKey = self.getConfigKey(kwargs)
         db = DB(self.getDBName(**kwargs), self.getDefaultKey())

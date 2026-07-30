@@ -57,6 +57,7 @@ def main():
     parser.add_argument('--record', dest='record', action=argparse.BooleanOptionalAction, default=False,  help='Record initial application steps')
     parser.add_argument('--pending', dest='pending', action=argparse.BooleanOptionalAction, default=False,  help='get pending kernel names')
     parser.add_argument('--stats', dest='stats', action=argparse.BooleanOptionalAction, default=False,  help='get stats of finished kernels')
+    parser.add_argument('--stats-all', dest='stats_all', action=argparse.BooleanOptionalAction, default=False, help='print stats for every configuration explored during optimization')
     parser.add_argument('-s', '--save-best-config', dest='save', action=argparse.BooleanOptionalAction, default=False, help="Save best configuration in benchmark directory")
     parser.add_argument('--kernel', dest='kernel', type=str, default='all', help='Which kernel(s) to optimize')
     parser.add_argument('--run-optimal', dest='run', action=argparse.BooleanOptionalAction, default=False, help='Run Optimal Benchmark configuration')
@@ -235,6 +236,21 @@ def main():
                       options.get('NumThreads', -1),
                       options.get('MinTeams', -1),
                       options.get('MaxThreads', -1)))
+            elif args.stats_all:
+                rows = []
+                selected_kernels = bench.getKernels('record').items()
+                if kernel.lower() != 'all':
+                    selected_kernels = [
+                        (kernel, bench.getKernels('record')[kernel])]
+                for _, explored_kernel in selected_kernels:
+                    for row in explored_kernel.ExplorationStats(**optParams):
+                        rows.append({'Kernel': explored_kernel.Name, **row})
+                if rows:
+                    pd.set_option('display.max_columns', None)
+                    pd.set_option('display.max_rows', None)
+                    print(pd.DataFrame(rows).to_string(index=False))
+                else:
+                    print('No optimization experiments found')
             elif make_best:
                 best_configs = list()
 
