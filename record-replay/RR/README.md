@@ -127,6 +127,16 @@ In the case of a nvidia system please install also 'python -m pip install pycuda
 
     Finally, in the case of running the optimizer on a network file system such as NFS, Lustre, VAST, GPFS, during replay the recorded images are loaded from network. Thus the process is slower. We provide the additional option `--tmp-dir` that can define a scratch directory to save temporal files either in memory or in a local hard drive, such as an SSD. We typically set this value to `/dev/shm/`.
 
+    NVIDIA CUPTI returns `CUPTI_ERROR_MAX_LIMIT_REACHED` when an activity buffer has been fully consumed; this is a normal end-of-buffer condition. The runtime suppresses that diagnostic, and the optimizer removes each temporary `kernel_activities.csv` after parsing it (including after failed replay attempts) to prevent profiler output from consuming the available disk space.
+
+    Hardware metric collection is disabled during whole-application recording because collecting metrics around every launch can make kernel-heavy applications such as LULESH appear to hang. Isolated kernel replay enables it with `LIBOMPTARGET_RR_PROFILE_METRICS=1`. CUPTI activity tracing remains enabled during recording, so kernel discovery and timing data are still collected; changing the activity-buffer allocation does not address the per-launch metric overhead.
+
+    Parsed `GLoads`, `GStores`, `Occupancy`, and `Branch Efficiency` values are retained in each checkpointed kernel's `Metrics` dictionary. They are zero for the default low-overhead record pass. To collect real whole-application values, explicitly run the record command with `LIBOMPTARGET_RR_PROFILE_METRICS=1`; this can be slow for applications with many launches. Optimization databases continue to store separately measured isolated-replay load/store metrics, which are the values used by optimization objectives and ratios.
+
+    Optimization databases are written atomically so an interrupted or out-of-space write cannot truncate the last valid checkpoint. If an existing database is already malformed, it is preserved with a `.corrupt-<timestamp>` suffix and optimization restarts with a new database while emitting a warning.
+
+    If `test_corrupt_database_is_preserved_and_reinitialized` raises `JSONDecodeError` at the direct `json.load` call, the test and `RRUtil/DataBase.py` are from different revisions (the recovery implementation wraps that call). Update both files together and verify with `git diff -- record-replay/RR/RRUtil/DataBase.py record-replay/RR/tests/test_database.py`. The database test loads `DataBase.py` by its repository path to avoid accidentally testing another installed `RRUtil` package.
+    
 4. Querying the obtained kernel speedup can be done through the following command:
 
     ```bash

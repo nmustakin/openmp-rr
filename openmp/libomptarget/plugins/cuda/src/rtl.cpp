@@ -96,6 +96,14 @@ struct KernelTy {
 };
 
 namespace {
+/// Return whether expensive per-launch NVIDIA hardware metrics were requested.
+/// Recording full applications must leave this disabled because nvmetrics
+/// serializes and replays every kernel once per requested metric.
+bool profileMetricsEnabled() {
+  const char *MetricsEnv = getenv("LIBOMPTARGET_RR_PROFILE_METRICS");
+  return MetricsEnv && std::string(MetricsEnv) != "0";
+}
+
 bool checkResult(CUresult Err, const char *ErrMsg) {
   if (Err == CUDA_SUCCESS)
     return true;
@@ -1238,30 +1246,25 @@ public:
 
     CUstream Stream = getStream(DeviceId, AsyncInfo);
     
-    // Setup metrics
-    std::vector<std::string> MetricNames = {
-      "achieved_occupancy",
-      "branch_efficiency",
-      "dram_read_transactions",
-      "dram_write_transactions",
-      "global_load_requests",
-      "global_store_requests",
-      "local_load_requests",
-      "local_store_requests"
-    };
-
-    std::vector<std::string> MetricIDs = {
-      "sm__warps_active.avg.pct_of_peak_sustained_active",
-      "smsp__sass_average_branch_targets_threads_uniform.pct",
-      "dram__sectors_read.sum",
-      "dram__sectors_write.sum",
-      "l1tex__t_requests_pipe_lsu_mem_global_op_ld.sum",
-      "l1tex__t_requests_pipe_lsu_mem_global_op_st.sum",
-      "l1tex__t_requests_pipe_lsu_mem_local_op_ld.sum",
-      "l1tex__t_requests_pipe_lsu_mem_local_op_st.sum"
-    };
-    // Start measurement
-    nvmetrics::measureMetricsStart(MetricIDs);
+    const bool ProfileMetrics = profileMetricsEnabled();
+    std::vector<std::string> MetricNames;
+    std::vector<std::string> MetricIDs;
+    if (ProfileMetrics) {
+      MetricNames = {"achieved_occupancy", "branch_efficiency",
+                     "dram_read_transactions", "dram_write_transactions",
+                     "global_load_requests", "global_store_requests",
+                     "local_load_requests", "local_store_requests"};
+      MetricIDs = {
+          "sm__warps_active.avg.pct_of_peak_sustained_active",
+          "smsp__sass_average_branch_targets_threads_uniform.pct",
+          "dram__sectors_read.sum",
+          "dram__sectors_write.sum",
+          "l1tex__t_requests_pipe_lsu_mem_global_op_ld.sum",
+          "l1tex__t_requests_pipe_lsu_mem_global_op_st.sum",
+          "l1tex__t_requests_pipe_lsu_mem_local_op_ld.sum",
+          "l1tex__t_requests_pipe_lsu_mem_local_op_st.sum"};
+      nvmetrics::measureMetricsStart(MetricIDs);
+    }
     
     Err = cuLaunchKernel(KernelInfo->Func, CudaBlocksPerGrid, /* gridDimY */ 1,
                          /* gridDimZ */ 1, CudaThreadsPerBlock,
@@ -1271,17 +1274,16 @@ public:
     if (!checkResult(Err, "Error returned from cuLaunchKernel\n"))
       return OFFLOAD_FAIL;
 
-    // Stop measurement
-    std::vector<double> MetricResults = nvmetrics::measureMetricsStop();
-    assert(MetricIDs.size() == MetricResults.size());
-
     DP("Launch of entry point at " DPxMOD " successful!\n",
        DPxPTR(TgtEntryPtr));
 
-    // Print result of the measurement
-    for (int i = 0; i < MetricResults.size(); i++) {
-      printf("||NVMetrics|| %s: %lf \n", MetricNames[i].c_str(), MetricResults[i]);
-    } 
+    if (ProfileMetrics) {
+      std::vector<double> MetricResults = nvmetrics::measureMetricsStop();
+      assert(MetricIDs.size() == MetricResults.size());
+      for (size_t I = 0; I < MetricResults.size(); ++I)
+        printf("||NVMetrics|| %s: %lf \n", MetricNames[I].c_str(),
+               MetricResults[I]);
+    }
 
     return OFFLOAD_SUCCESS;
   }

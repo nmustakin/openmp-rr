@@ -12,7 +12,9 @@
 
 #include <cassert>
 #include <cstddef>
+#include <cstdlib>
 #include <cuda.h>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 
@@ -935,6 +937,11 @@ private:
 
 static FILE *fp = NULL;
 
+bool profileMetricsEnabled() {
+  const char *MetricsEnv = std::getenv("LIBOMPTARGET_RR_PROFILE_METRICS");
+  return MetricsEnv && std::string(MetricsEnv) != "0";
+}
+
 void initializeFile() {
   if (fp == NULL) {
     fp = fopen("kernel_activities.csv", "a+");
@@ -983,6 +990,8 @@ void CUPTIAPI bufferCompleted(CUcontext ctx, uint32_t streamId,
                 kernel->dynamicSharedMemory, /*Size*//*Throughput*//*SrcMemType*/
                 /*DstMemType*/ kernel->deviceId, kernel->contextId,
                 kernel->streamId, kernel->name, kernel->correlationId);
+        if (!profileMetricsEnabled())
+          fprintf(fp, ",0.0,0.0,0.0,0.0\n");
       }
     }
     else if (status != CUPTI_ERROR_MAX_LIMIT_REACHED) {
@@ -1010,7 +1019,16 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   //CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMCPY));
   //CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMSET));
 
-  CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_KERNEL));
+  //CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_KERNEL));
+  static std::once_flag CUPTIActivityInitialization;
+  std::call_once(CUPTIActivityInitialization, []() {
+    CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_KERNEL));
+    CUPTI_CHECK(cuptiActivityRegisterCallbacks(bufferRequested,
+                                               bufferCompleted));
+  });
+
+  const bool ProfileMetrics = profileMetricsEnabled();
+
  
    // Setup metrics
   std::vector<std::string> MetricNames = {
@@ -1035,9 +1053,8 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
     "l1tex__t_requests_pipe_lsu_mem_local_op_st.sum"
   };
   // Start measurement
-  nvmetrics::measureMetricsStart(MetricIDs);
-
-  CUPTI_CHECK(cuptiActivityRegisterCallbacks(bufferRequested, bufferCompleted));
+  if (ProfileMetrics)
+    nvmetrics::measureMetricsStart(MetricIDs);
   
   CUresult Res =
       cuLaunchKernel(Func, NumBlocks, /* gridDimY */ 1,
@@ -1046,22 +1063,20 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
                      Stream, (void **)KernelArgs, nullptr);
 
   // Stop measurement
-  std::vector<double> MetricResults = nvmetrics::measureMetricsStop();
-  assert(MetricIDs.size() == MetricResults.size());
-  CUPTI_CHECK(cuptiActivityFlushAll(0));
-  
-  if (fp == NULL)
-    initializeFile();
-
-  // Print result of the measurement
-  /*for (int i = 0; i < MetricResults.size(); i++) {
-    printf("||NVMetrics|| %s: %lf \n", MetricNames[i].c_str(), MetricResults[i]);
-  }*/
-  fprintf(fp, ",%lf,%lf,%lf,%lf\n", MetricResults[4], MetricResults[5],
-                                    MetricResults[0], MetricResults[1]);
-
-  //printf("Error at Finalize File\n");
-  finalizeFile();
+  std::vector<double> MetricResults(MetricIDs.size(), 0.0);
+  if (ProfileMetrics) {
+    MetricResults = nvmetrics::measureMetricsStop();
+    assert(MetricIDs.size() == MetricResults.size());
+  }
+  if (ProfileMetrics) {
+    CUPTI_CHECK(cuptiActivityFlushAll(0));
+    if (fp == NULL)
+      initializeFile();
+    // Print result of the measurement
+    fprintf(fp, ",%lf,%lf,%lf,%lf\n", MetricResults[4], MetricResults[5],
+                                      MetricResults[0], MetricResults[1]);
+    finalizeFile();
+  }
 
   return Plugin::check(Res, "Error in cuLaunchKernel for '%s': %s", getName());
 }
@@ -1138,7 +1153,12 @@ struct CUDAPluginTy final : public GenericPluginTy {
   }
 
   /// Deinitialize the plugin.
-  Error deinitImpl() override { return Plugin::success(); }
+  Error deinitImpl() override {
+    if (!profileMetricsEnabled())
+      CUPTI_CHECK(cuptiActivityFlushAll(0));
+    finalizeFile();
+    return Plugin::success();
+  }
 
   /// Get the ELF code for recognizing the compatible image binary.
   uint16_t getMagicElfBits() const override { return ELF::EM_CUDA; }

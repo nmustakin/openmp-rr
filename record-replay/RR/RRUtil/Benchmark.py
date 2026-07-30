@@ -31,7 +31,10 @@ class Kernel:
                 'OMP_NUM_THREADS' : 1,
                 'OMP_TARGET_OFFLOAD' : 'mandatory',
                 'LIBOMPTARGET_NEXTGEN_PLUGINS' : 1,
-                'LIBOMPTARGET_RR_DEVMEM_SIZE' : MaxMem
+                'LIBOMPTARGET_RR_DEVMEM_SIZE' : MaxMem,
+                # Whole-application recording only needs CUPTI activity data.
+                # Enable expensive hardware metrics for isolated replays.
+                'LIBOMPTARGET_RR_PROFILE_METRICS' : 1
             }
             self._env=' '.join([f'{k}={v}' for k,v in self.envVars.items()])
             self.cmd = 'llvm-omp-kernel-replay'
@@ -67,6 +70,7 @@ class Kernel:
         self.NumTeams = -1
         self.NumThreads = -1
         self.ExecTime = -1
+        self.Metrics = {}
 
     def getTripCount(self):
         with open(f'{self.HashName}.json', 'r') as fd:
@@ -553,12 +557,17 @@ class Kernel:
 
         return results, global_loads, global_stores
 
-    def setOrigDescr(self, Regs, SMem, NumTeams, NumThreads, ExecTime):
+    def setOrigDescr(self, Regs, SMem, NumTeams, NumThreads, ExecTime,
+                     **metrics):
         self.NumRegs = Regs
         self.SMem = SMem
         self.NumTeams = NumTeams
         self.NumThreads = NumThreads
         self.ExecTime = ExecTime
+        self.Metrics = {
+            name: value for name, value in metrics.items()
+            if value is not None
+        }
         self.profiled = True
 
     def IsProfiled(self):
@@ -591,6 +600,7 @@ class Kernel:
         ret['NumTeams'] = self.NumTeams
         ret['NumThreads'] = self.NumThreads
         ret['ExecTime'] = self.ExecTime
+        ret['Metrics'] = self.Metrics
         ret['DB'] = self.dbDir
         ret['Profiler'] = self.Profiler.to_dict()
         ret['recorded'] = self.recorded
@@ -600,7 +610,9 @@ class Kernel:
     def from_dict(cls, d):
         prof = Device.getDevice(d['Profiler']['Name'])
         kernel = cls(prof, d['Name'], d['HashName'], d['DB'], d['recorded'])
-        kernel.setOrigDescr(d['NumRegs'], d['SMem'], d['NumTeams'], d['NumThreads'], d['ExecTime'])
+        kernel.setOrigDescr(d['NumRegs'], d['SMem'], d['NumTeams'],
+                            d['NumThreads'], d['ExecTime'],
+                            **d.get('Metrics', {}))
         return kernel
 
 class BenchmarkExecution:
@@ -834,7 +846,12 @@ class BaseBenchmark(ABC):
                                          v['Static SMem'],
                                          v['Grid X'],
                                          v['Block X'],
-                                         v['Duration'] )
+                                         v['Duration'],
+                                         GLoads=v.get('GLoads'),
+                                         GStores=v.get('GStores'),
+                                         Occupancy=v.get('Occupancy'),
+                                         BranchEfficiency=v.get(
+                                             'Branch Efficiency'))
                 kernels[f'{k}.json'] = kernel
             return application_time, kernels
 
@@ -866,7 +883,12 @@ class BaseBenchmark(ABC):
                                          v['Static SMem'],
                                          v['Grid X'],
                                          v['Block X'],
-                                         v['Duration'] )
+                                         v['Duration'],
+                                         GLoads=v.get('GLoads'),
+                                         GStores=v.get('GStores'),
+                                         Occupancy=v.get('Occupancy'),
+                                         BranchEfficiency=v.get(
+                                             'Branch Efficiency'))
                 kernels[f'{kname_to_hash[k]}.json'] = kernel
             else:
                 raise RuntimeError(f'Kernel {k} was profiled but not recorded')
