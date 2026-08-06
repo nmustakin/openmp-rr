@@ -112,6 +112,9 @@ class DB:
             return 1E12
 
         #print("-----------IN DURATION----------\n", self.Data[key]['dynamic'])
+        if 'duration' in self.Data[key] and self.Data[key]['duration']:
+            return np.array(self.Data[key]['duration']).mean()
+
         duration = np.array([ v[-1] for v in self.Data[key]['dynamic']]).mean()
         return duration
 
@@ -318,8 +321,8 @@ class DB:
             if Valid:
               self.Data[key]['static'] += static
               self.Data[key]['dynamic'] += dynamic
-              self.Data[key]['duration'] += duration
-              self.Data[key]['energy'] += energy
+              self.Data[key]['duration'] += self._flatten_metric(duration)
+              self.Data[key]['energy'] += self._flatten_metric(energy)
               self.Data[key]['gloads'] += self._flatten_metric(gloads)
               self.Data[key]['gstores'] += self._flatten_metric(gstores)
         else:

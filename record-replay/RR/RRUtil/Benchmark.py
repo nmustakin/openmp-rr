@@ -49,8 +49,11 @@ class Kernel:
                 cmd += f' --verify'
             return cmd + ' {kernel_name}.json'
 
-        def env(self):
-            return self._env
+        def env(self, profile_metrics=True, profile_activities=True):
+            env_vars = dict(self.envVars)
+            env_vars['LIBOMPTARGET_RR_PROFILE_METRICS'] = int(profile_metrics)
+            env_vars['LIBOMPTARGET_RR_PROFILE_ACTIVITIES'] = int(profile_activities)
+            return ' '.join([f'{k}={v}' for k,v in env_vars.items()])
 
     def __init__(self, Device, name, hashname, dbDir, recorded=True):
         self.Name = name
@@ -152,7 +155,7 @@ class Kernel:
         print('Best :{} {}={} {}={} (s)'.format( best, 'speedup', Y[index_max], 'Duration', db.Duration(Configs[index_max])))
         # TODO: Replayer.command() runs nvprof, need to change that. 
         cmd = self.Replayer.command(NumThreads, NumTeams).format(kernel_name=f'{self.HashName}')
-        env = self.Replayer.env()
+        env = self.Replayer.env(profile_metrics=True, profile_activities=True)
         #TODO: replace with cupti
         #Profiler.command() runs nvprof
         #cmd = self.Profiler.command().format(executable=cmd, output=f'{self.HashName}.csv')
@@ -480,9 +483,6 @@ class Kernel:
         NumTeams = kwargs.get('NumTeams', None)
        
         device_handle = pynvml.nvmlDeviceGetHandleByIndex(deviceID)
-        start = time.time()
-        #start energy here
-        start_energy = nvmlEnergy(device_handle)
         StaticStats = self.Profiler.deviceCompile(self.original, self.Name, self.HashName, **kwargs)
         SStats = None
         if StaticStats:
@@ -494,7 +494,8 @@ class Kernel:
                 return False, None, None, None, None, None, None
 
         DStats = list()
-        res, GLoads, GStores = self.execute(NumThreads, NumTeams, maxIters=Tries)
+        res, durations, energies, GLoads, GStores = self.execute(
+            NumThreads, NumTeams, device_handle=device_handle, maxIters=Tries)
         if len(res) == 0:
             end = time.time()
             #end energy here
@@ -507,59 +508,72 @@ class Kernel:
         #end energy here
         end_energy = nvmlEnergy(device_handle)
 
-        return True, SStats, DStats, end-start, end_energy-start_energy, GLoads, GStores
+        return True, SStats, DStats, durations, energies, GLoads, GStores
 
     def execute(self, NumThreads=None, NumTeams=None, maxIters = 9,
-                keepMaxTeam=True, dropSingleTeams=False):
+                keepMaxTeam=True, dropSingleTeams=False, device_handle=None):
         #TODO: replace reference to nvprof in command()
         cmd = self.Replayer.command(NumThreads, NumTeams).format(kernel_name=f'{self.HashName}')
-        env = self.Replayer.env()
+        metrics_env = self.Replayer.env(profile_metrics=True, profile_activities=True)
+        timing_env = self.Replayer.env(profile_metrics=False, profile_activities=False)
         
         #cmd = self.Profiler.command().format(executable=cmd, output=f'{self.HashName}.csv')
         #env += ' ' + self.Profiler.env()
         results = []
+        durations = []
+        energies = []
         global_loads = []
         global_stores = []
+        activities_file = Path('kernel_activities.csv')
         #print("MaxIters ", maxIters)
         for i in range (0, maxIters):
-            activities_file = Path('kernel_activities.csv')
             activities_file.unlink(missing_ok=True)
-            ret, stdout, stderr = execute_command(env + ' timeout 180s ' + cmd,
+            if device_handle is not None:
+                start_energy = nvmlEnergy(device_handle)
+            start = time.perf_counter()
+            ret, stdout, stderr = execute_command(timing_env + ' timeout 180s ' + cmd,
                     capture_output=True, cwd=os.getcwd(),
                     shell=True, ContinueOnFailure=True)
-            #print("Return value ", ret)
-            #print("\n\nStdOut\n", stdout)
-            #print("\n\nStdErr\n", stderr)
+            end = time.perf_counter()
+            if device_handle is not None:
+                end_energy = nvmlEnergy(device_handle)
             if ret != 0:
                 activities_file.unlink(missing_ok=True)
-                return [], [], []
-            #print(os.getcwd())
-            
-            #print("Reading from ", self.HashName)
-             
-            #kernelDescr = self.Profiler.parse(f'{self.HashName}.csv',
-            try:
-                kernelDescr = self.Profiler.parse(str(activities_file),
-                                                  keepMaxTeam,
-                                                  dropSingleTeams)[self.Name]
-            finally:
-                activities_file.unlink(missing_ok=True)
-            global_loads.append(kernelDescr.pop('GLoads', None))
-            global_stores.append(kernelDescr.pop('GStores', None))
-            results.append(list(kernelDescr.values()))
-            
-            #print(results)
+                return [], [], [], [], []
+            durations.append(end - start)
+            energies.append((end_energy - start_energy) if device_handle is not None else 0)
 
-            # The legacy CUDA plugin reports nvmetrics on stdout instead of the
-            # CUPTI activity CSV used by the nextgen plugin. Use stdout as a
-            # fallback so both plugins populate the same database fields.
-            if global_loads[-1] is None or global_stores[-1] is None:
-                load_match = re.search(r'\|\|NVMetrics\|\| global_load_requests: ([-+0-9.eE]+)', stdout)
-                store_match = re.search(r'\|\|NVMetrics\|\| global_store_requests: ([-+0-9.eE]+)', stdout)
-                global_loads[-1] = float(load_match.group(1)) if load_match else 0.0
-                global_stores[-1] = float(store_match.group(1)) if store_match else 0.0
+        # Metrics are deterministic enough for optimization and expensive to
+        # collect, so profile them once after all timing/energy samples.
+        activities_file.unlink(missing_ok=True)
+        ret, stdout, stderr = execute_command(metrics_env + ' timeout 180s ' + cmd,
+                capture_output=True, cwd=os.getcwd(),
+                shell=True, ContinueOnFailure=True)
+        if ret != 0:
+            activities_file.unlink(missing_ok=True)
+            return [], [], [], [], []
 
-        return results, global_loads, global_stores
+        try:
+            kernelDescr = self.Profiler.parse(str(activities_file),
+                                              keepMaxTeam,
+                                              dropSingleTeams)[self.Name]
+        finally:
+            activities_file.unlink(missing_ok=True)
+        global_loads.append(kernelDescr.pop('GLoads', None))
+        global_stores.append(kernelDescr.pop('GStores', None))
+        results.append(list(kernelDescr.values()))
+
+        # The legacy CUDA plugin reports nvmetrics on stdout instead of the
+        # CUPTI activity CSV used by the nextgen plugin. Use stdout as a
+        # fallback so both plugins populate the same database fields.
+        if global_loads[-1] is None or global_stores[-1] is None:
+            load_match = re.search(r'\|\|NVMetrics\|\| global_load_requests: ([-+0-9.eE]+)', stdout)
+            store_match = re.search(r'\|\|NVMetrics\|\| global_store_requests: ([-+0-9.eE]+)', stdout)
+            global_loads[-1] = float(load_match.group(1)) if load_match else 0.0
+            global_stores[-1] = float(store_match.group(1)) if store_match else 0.0
+        
+
+        return results, durations, energies, global_loads, global_stores
 
     def setOrigDescr(self, Regs, SMem, NumTeams, NumThreads, ExecTime,
                      **metrics):
@@ -711,8 +725,11 @@ class BaseBenchmark(ABC):
         def command(self):
             return self.cmd
 
-        def env(self):
-            return self._env
+        def env(self, profile_metrics=True, profile_activities=True):
+            env_vars = dict(self.envVars)
+            env_vars['LIBOMPTARGET_RR_PROFILE_METRICS'] = int(profile_metrics)
+            env_vars['LIBOMPTARGET_RR_PROFILE_ACTIVITIES'] = int(profile_activities)
+            return ' '.join([f'{k}={v}' for k,v in env_vars.items()])
 
         def threads(self):
             return '{0}={1}'.format('OMP_NUM_THREAD', self.envVars['OMP_NUM_THREADS'])

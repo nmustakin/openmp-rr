@@ -942,6 +942,11 @@ bool profileMetricsEnabled() {
   return MetricsEnv && std::string(MetricsEnv) != "0";
 }
 
+bool profileActivitiesEnabled() {
+  const char *ActivitiesEnv = std::getenv("LIBOMPTARGET_RR_PROFILE_ACTIVITIES");
+  return !ActivitiesEnv || std::string(ActivitiesEnv) != "0";
+}
+
 void initializeFile() {
   if (fp == NULL) {
     fp = fopen("kernel_activities.csv", "a+");
@@ -1016,16 +1021,15 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   if (!Stream)
     return Plugin::error("Failure to get stream");
 
-  //CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMCPY));
-  //CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMSET));
+  const bool ProfileActivities = profileActivitiesEnabled();
 
-  //CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_KERNEL));
   static std::once_flag CUPTIActivityInitialization;
-  std::call_once(CUPTIActivityInitialization, []() {
-    CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_KERNEL));
-    CUPTI_CHECK(cuptiActivityRegisterCallbacks(bufferRequested,
-                                               bufferCompleted));
-  });
+  if (ProfileActivities)
+    std::call_once(CUPTIActivityInitialization, []() {
+      CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_KERNEL));
+      CUPTI_CHECK(cuptiActivityRegisterCallbacks(bufferRequested,
+                                                 bufferCompleted));
+    });
 
   const bool ProfileMetrics = profileMetricsEnabled();
 
@@ -1069,7 +1073,8 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
     assert(MetricIDs.size() == MetricResults.size());
   }
   if (ProfileMetrics) {
-    CUPTI_CHECK(cuptiActivityFlushAll(0));
+    if (ProfileActivities)
+      CUPTI_CHECK(cuptiActivityFlushAll(0));
     if (fp == NULL)
       initializeFile();
     // Print result of the measurement

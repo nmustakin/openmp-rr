@@ -104,6 +104,11 @@ bool profileMetricsEnabled() {
   return MetricsEnv && std::string(MetricsEnv) != "0";
 }
 
+bool profileActivitiesEnabled() {
+  const char *ActivitiesEnv = getenv("LIBOMPTARGET_RR_PROFILE_ACTIVITIES");
+  return !ActivitiesEnv || std::string(ActivitiesEnv) != "0";
+}
+
 bool checkResult(CUresult Err, const char *ErrMsg) {
   if (Err == CUDA_SUCCESS)
     return true;
