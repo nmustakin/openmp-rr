@@ -947,6 +947,11 @@ bool profileActivitiesEnabled() {
   return !ActivitiesEnv || std::string(ActivitiesEnv) != "0";
 }
 
+bool profileTimingEnabled() {
+  const char *TimingEnv = std::getenv("LIBOMPTARGET_RR_PROFILE_TIMING");
+  return TimingEnv && std::string(TimingEnv) != "0";
+}
+
 void initializeFile() {
   if (fp == NULL) {
     fp = fopen("kernel_activities.csv", "a+");
@@ -1032,7 +1037,26 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
     });
 
   const bool ProfileMetrics = profileMetricsEnabled();
+  const bool ProfileTiming = profileTimingEnabled();
 
+  CUevent TimingStart = nullptr;
+  CUevent TimingStop = nullptr;
+  if (ProfileTiming) {
+    if (auto Err = Plugin::check(cuEventCreate(&TimingStart, CU_EVENT_DEFAULT),
+                                 "Error in cuEventCreate: %s"))
+      return Err;
+    if (auto Err = Plugin::check(cuEventCreate(&TimingStop, CU_EVENT_DEFAULT),
+                                 "Error in cuEventCreate: %s")) {
+      cuEventDestroy(TimingStart);
+      return Err;
+    }
+    if (auto Err = Plugin::check(cuEventRecord(TimingStart, Stream),
+                                 "Error in cuEventRecord: %s")) {
+      cuEventDestroy(TimingStart);
+      cuEventDestroy(TimingStop);
+      return Err;
+    }
+  }
  
    // Setup metrics
   std::vector<std::string> MetricNames = {
@@ -1065,6 +1089,21 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
                      /* gridDimZ */ 1, NumThreads,
                      /* blockDimY */ 1, /* blockDimZ */ 1, DynamicMemorySize,
                      Stream, (void **)KernelArgs, nullptr);
+
+  if (ProfileTiming && Res == CUDA_SUCCESS) {
+    Res = cuEventRecord(TimingStop, Stream);
+    if (Res == CUDA_SUCCESS)
+      Res = cuEventSynchronize(TimingStop);
+    float DurationMs = 0.0f;
+    if (Res == CUDA_SUCCESS)
+      Res = cuEventElapsedTime(&DurationMs, TimingStart, TimingStop);
+    if (Res == CUDA_SUCCESS)
+      printf("||ReplayTiming|| duration_seconds: %.9g\n", DurationMs / 1.0e3);
+  }
+  if (ProfileTiming) {
+    cuEventDestroy(TimingStart);
+    cuEventDestroy(TimingStop);
+  }
 
   // Stop measurement
   std::vector<double> MetricResults(MetricIDs.size(), 0.0);

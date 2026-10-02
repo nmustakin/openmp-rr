@@ -1,0 +1,747 @@
+{
+      "executable": "lulesh",
+      "resultsdir": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+      "root": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/benchmarks/lulesh-omp",
+      "Profiler": {
+            "Name": "nvidia",
+            "Capability": 7.5
+      },
+      "versions": {
+            "record": {
+                  "name": "record",
+                  "BuildTime": 8.523054122924805,
+                  "OuterTime": 41376.63411259651,
+                  "InnerTime": "41360.3",
+                  "BuildEnergy": 83541,
+                  "OuterEnergy": 2482967724,
+                  "ExecutableDir": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/execute/LULESH/nvidia/build",
+                  "Kernels": {
+                        "__omp_offloading_3b3197aca83bad82_l1721.json": {
+                              "Name": "__omp_offloading_821_710ab97__Z22CalcKinematicsForElemsR6DomainPddi_l1721",
+                              "HashName": "__omp_offloading_3b3197aca83bad82_l1721",
+                              "NumRegs": 158,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 3801088.0,
+                                    "GStores": 393216.0,
+                                    "Occupancy": 37.13360595703125,
+                                    "BranchEfficiency": 100.0
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_a414935274d8f861_l2372.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL15EvalEOSForElemsR6DomainPd_l2372",
+                              "HashName": "__omp_offloading_a414935274d8f861_l2372",
+                              "NumRegs": 68,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 524288.0,
+                                    "GStores": 327680.0,
+                                    "Occupancy": 85.7803726196289,
+                                    "BranchEfficiency": 98.7998275756836
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_1695671c24d27c61_l1235.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL17CalcForceForNodesR6Domain_l1235",
+                              "HashName": "__omp_offloading_1695671c24d27c61_l1235",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 0.0,
+                                    "GStores": 201255.0,
+                                    "Occupancy": 97.25057220458984,
+                                    "BranchEfficiency": 99.99986267089844
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_9a12a96914fb635f_l1841.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL20CalcLagrangeElementsR6DomainPd_l1841",
+                              "HashName": "__omp_offloading_9a12a96914fb635f_l1841",
+                              "NumRegs": 41,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 393216.0,
+                                    "GStores": 262144.0,
+                                    "Occupancy": 97.90594482421875,
+                                    "BranchEfficiency": 99.70980834960938
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_393139570d27d646_l1377.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL20CalcPositionForNodesR6Domaindi_l1377",
+                              "HashName": "__omp_offloading_393139570d27d646_l1377",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 402510.0,
+                                    "GStores": 201255.0,
+                                    "Occupancy": 98.73020935058594,
+                                    "BranchEfficiency": 99.99986267089844
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_345675c6a2e27498_l1340.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL20CalcVelocityForNodesR6Domainddi_l1340",
+                              "HashName": "__omp_offloading_345675c6a2e27498_l1340",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 402510.0,
+                                    "GStores": 201255.0,
+                                    "Occupancy": 98.62407684326172,
+                                    "BranchEfficiency": 99.99986267089844
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_1489ae3c302063cb_l1201.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL23CalcVolumeForceForElemsR6Domain_l1201",
+                              "HashName": "__omp_offloading_1489ae3c302063cb_l1201",
+                              "NumRegs": 56,
+                              "SMem": 1728.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 68737.0,
+                                    "GStores": 6403.0,
+                                    "Occupancy": 95.02526092529297,
+                                    "BranchEfficiency": 99.77257537841797
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_dfa38ad693ccbe4a_l333.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL23InitStressTermsForElemsR6DomainPdS1_S1_i_l333",
+                              "HashName": "__omp_offloading_dfa38ad693ccbe4a_l333",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 131072.0,
+                                    "GStores": 196608.0,
+                                    "Occupancy": 97.67382049560547,
+                                    "BranchEfficiency": 100.0
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_353e1c59b5003c91_l584.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL23IntegrateStressForElemsR6DomainPdS1_S1_S1_ii_l584",
+                              "HashName": "__omp_offloading_353e1c59b5003c91_l584",
+                              "NumRegs": 92,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 2293760.0,
+                                    "GStores": 1703936.0,
+                                    "Occupancy": 61.1805534362793,
+                                    "BranchEfficiency": 100.0
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_353e1c59b5003c91_l649.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL23IntegrateStressForElemsR6DomainPdS1_S1_S1_ii_l649",
+                              "HashName": "__omp_offloading_353e1c59b5003c91_l649",
+                              "NumRegs": 48,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 2254742.0,
+                                    "GStores": 201255.0,
+                                    "Occupancy": 98.0457763671875,
+                                    "BranchEfficiency": 98.31731414794922
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_4d95855e27e0b06c_l1279.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL24CalcAccelerationForNodesR6Domaini_l1279",
+                              "HashName": "__omp_offloading_4d95855e27e0b06c_l1279",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 268340.0,
+                                    "GStores": 201255.0,
+                                    "Occupancy": 99.0249252319336,
+                                    "BranchEfficiency": 99.9998779296875
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_ff667648ef607ce7_l1029.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL28CalcFBHourglassForceForElemsR6DomainPdS1_S1_S1_S1_S1_S1_dii_l1029",
+                              "HashName": "__omp_offloading_ff667648ef607ce7_l1029",
+                              "NumRegs": 48,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 2455997.0,
+                                    "GStores": 201255.0,
+                                    "Occupancy": 98.32647705078125,
+                                    "BranchEfficiency": 98.31731414794922
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_ff667648ef607ce7_l844.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL28CalcFBHourglassForceForElemsR6DomainPdS1_S1_S1_S1_S1_S1_dii_l844",
+                              "HashName": "__omp_offloading_ff667648ef607ce7_l844",
+                              "NumRegs": 154,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 5439488.0,
+                                    "GStores": 1572864.0,
+                                    "Occupancy": 37.28614807128906,
+                                    "BranchEfficiency": 100.0
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_b7b1301e7ff7f3e8_l1080.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL28CalcHourglassControlForElemsR6DomainPdd_l1080",
+                              "HashName": "__omp_offloading_b7b1301e7ff7f3e8_l1080",
+                              "NumRegs": 162,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 2228224.0,
+                                    "GStores": 3211264.0,
+                                    "Occupancy": 37.2756462097168,
+                                    "BranchEfficiency": 100.0
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_89055039b82708ed_l2103.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL28CalcMonotonicQRegionForElemsR6DomainPdd_l2103",
+                              "HashName": "__omp_offloading_89055039b82708ed_l2103",
+                              "NumRegs": 46,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 1484445.25,
+                                    "GStores": 131072.0,
+                                    "Occupancy": 97.01246643066406,
+                                    "BranchEfficiency": 98.50349426269531
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_d63b5b8fbbb3f744_l1913.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL31CalcMonotonicQGradientsForElemsR6DomainPd_l1913",
+                              "HashName": "__omp_offloading_d63b5b8fbbb3f744_l1913",
+                              "NumRegs": 122,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 3801088.0,
+                                    "GStores": 393216.0,
+                                    "Occupancy": 49.38068771362305,
+                                    "BranchEfficiency": 100.0
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_34112685ae35cb7f_l1312.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL43ApplyAccelerationBoundaryConditionsForNodesR6Domain_l1312",
+                              "HashName": "__omp_offloading_34112685ae35cb7f_l1312",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 131,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 1563.0,
+                                    "GStores": 1563.0,
+                                    "Occupancy": 39.838478088378906,
+                                    "BranchEfficiency": 99.9826431274414
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        }
+                  }
+            },
+            "original": {
+                  "name": "original",
+                  "BuildTime": 8.523054122924805,
+                  "OuterTime": 414.94826102256775,
+                  "InnerTime": "413.477",
+                  "BuildEnergy": 83541,
+                  "OuterEnergy": 26660568,
+                  "ExecutableDir": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/execute/LULESH/nvidia/build",
+                  "Kernels": {
+                        "__omp_offloading_821_710ab97__Z22CalcKinematicsForElemsR6DomainPddi_l1721.json": {
+                              "Name": "__omp_offloading_821_710ab97__Z22CalcKinematicsForElemsR6DomainPddi_l1721",
+                              "HashName": "__omp_offloading_821_710ab97__Z22CalcKinematicsForElemsR6DomainPddi_l1721",
+                              "NumRegs": 158,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 3983353.75,
+                              "Metrics": {
+                                    "GLoads": 1900544.0,
+                                    "GStores": 196608.0,
+                                    "Occupancy": 18.566802978515625,
+                                    "BranchEfficiency": 50.0
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL15EvalEOSForElemsR6DomainPd_l2372.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL15EvalEOSForElemsR6DomainPd_l2372",
+                              "HashName": "__omp_offloading_821_710ab97__ZL15EvalEOSForElemsR6DomainPd_l2372",
+                              "NumRegs": 68,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 2288238.0,
+                              "Metrics": {
+                                    "GLoads": 262144.0,
+                                    "GStores": 163840.0,
+                                    "Occupancy": 42.89018630981445,
+                                    "BranchEfficiency": 49.3999137878418
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL17CalcForceForNodesR6Domain_l1235.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL17CalcForceForNodesR6Domain_l1235",
+                              "HashName": "__omp_offloading_821_710ab97__ZL17CalcForceForNodesR6Domain_l1235",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 109175.4765625,
+                              "Metrics": {
+                                    "GLoads": 0.0,
+                                    "GStores": 100627.5,
+                                    "Occupancy": 48.62528610229492,
+                                    "BranchEfficiency": 49.99993133544922
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL20CalcLagrangeElementsR6DomainPd_l1841.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL20CalcLagrangeElementsR6DomainPd_l1841",
+                              "HashName": "__omp_offloading_821_710ab97__ZL20CalcLagrangeElementsR6DomainPd_l1841",
+                              "NumRegs": 41,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 269530.6875,
+                              "Metrics": {
+                                    "GLoads": 196608.0,
+                                    "GStores": 131072.0,
+                                    "Occupancy": 48.952972412109375,
+                                    "BranchEfficiency": 49.85490417480469
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL20CalcPositionForNodesR6Domaindi_l1377.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL20CalcPositionForNodesR6Domaindi_l1377",
+                              "HashName": "__omp_offloading_821_710ab97__ZL20CalcPositionForNodesR6Domaindi_l1377",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 312054.0,
+                              "Metrics": {
+                                    "GLoads": 201255.0,
+                                    "GStores": 100627.5,
+                                    "Occupancy": 49.36510467529297,
+                                    "BranchEfficiency": 49.99993133544922
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL20CalcVelocityForNodesR6Domainddi_l1340.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL20CalcVelocityForNodesR6Domainddi_l1340",
+                              "HashName": "__omp_offloading_821_710ab97__ZL20CalcVelocityForNodesR6Domainddi_l1340",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 313159.25,
+                              "Metrics": {
+                                    "GLoads": 201255.0,
+                                    "GStores": 100627.5,
+                                    "Occupancy": 49.31203842163086,
+                                    "BranchEfficiency": 49.99993133544922
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL23CalcVolumeForceForElemsR6Domain_l1201.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL23CalcVolumeForceForElemsR6Domain_l1201",
+                              "HashName": "__omp_offloading_821_710ab97__ZL23CalcVolumeForceForElemsR6Domain_l1201",
+                              "NumRegs": 56,
+                              "SMem": 1728.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 177711.90625,
+                              "Metrics": {
+                                    "GLoads": 34368.5,
+                                    "GStores": 3201.5,
+                                    "Occupancy": 47.512630462646484,
+                                    "BranchEfficiency": 49.886287689208984
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL23InitStressTermsForElemsR6DomainPdS1_S1_i_l333.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL23InitStressTermsForElemsR6DomainPdS1_S1_i_l333",
+                              "HashName": "__omp_offloading_821_710ab97__ZL23InitStressTermsForElemsR6DomainPdS1_S1_i_l333",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 189013.671875,
+                              "Metrics": {
+                                    "GLoads": 65536.0,
+                                    "GStores": 98304.0,
+                                    "Occupancy": 48.836910247802734,
+                                    "BranchEfficiency": 50.0
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL23IntegrateStressForElemsR6DomainPdS1_S1_S1_ii_l584.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL23IntegrateStressForElemsR6DomainPdS1_S1_S1_ii_l584",
+                              "HashName": "__omp_offloading_821_710ab97__ZL23IntegrateStressForElemsR6DomainPdS1_S1_S1_ii_l584",
+                              "NumRegs": 92,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 3526802.75,
+                              "Metrics": {
+                                    "GLoads": 1146880.0,
+                                    "GStores": 851968.0,
+                                    "Occupancy": 30.59027671813965,
+                                    "BranchEfficiency": 50.0
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL23IntegrateStressForElemsR6DomainPdS1_S1_S1_ii_l649.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL23IntegrateStressForElemsR6DomainPdS1_S1_S1_ii_l649",
+                              "HashName": "__omp_offloading_821_710ab97__ZL23IntegrateStressForElemsR6DomainPdS1_S1_S1_ii_l649",
+                              "NumRegs": 48,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 3540986.0,
+                              "Metrics": {
+                                    "GLoads": 1127371.0,
+                                    "GStores": 100627.5,
+                                    "Occupancy": 49.02288818359375,
+                                    "BranchEfficiency": 49.15865707397461
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL24CalcAccelerationForNodesR6Domaini_l1279.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL24CalcAccelerationForNodesR6Domaini_l1279",
+                              "HashName": "__omp_offloading_821_710ab97__ZL24CalcAccelerationForNodesR6Domaini_l1279",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 243923.546875,
+                              "Metrics": {
+                                    "GLoads": 134170.0,
+                                    "GStores": 100627.5,
+                                    "Occupancy": 49.5124626159668,
+                                    "BranchEfficiency": 49.99993896484375
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL28CalcFBHourglassForceForElemsR6DomainPdS1_S1_S1_S1_S1_S1_dii_l1029.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL28CalcFBHourglassForceForElemsR6DomainPdS1_S1_S1_S1_S1_S1_dii_l1029",
+                              "HashName": "__omp_offloading_821_710ab97__ZL28CalcFBHourglassForceForElemsR6DomainPdS1_S1_S1_S1_S1_S1_dii_l1029",
+                              "NumRegs": 48,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 3447960.0,
+                              "Metrics": {
+                                    "GLoads": 1227998.5,
+                                    "GStores": 100627.5,
+                                    "Occupancy": 49.163238525390625,
+                                    "BranchEfficiency": 49.15865707397461
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL28CalcFBHourglassForceForElemsR6DomainPdS1_S1_S1_S1_S1_S1_dii_l844.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL28CalcFBHourglassForceForElemsR6DomainPdS1_S1_S1_S1_S1_S1_dii_l844",
+                              "HashName": "__omp_offloading_821_710ab97__ZL28CalcFBHourglassForceForElemsR6DomainPdS1_S1_S1_S1_S1_S1_dii_l844",
+                              "NumRegs": 154,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 8189565.5,
+                              "Metrics": {
+                                    "GLoads": 2719744.0,
+                                    "GStores": 786432.0,
+                                    "Occupancy": 18.64307403564453,
+                                    "BranchEfficiency": 50.0
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL28CalcHourglassControlForElemsR6DomainPdd_l1080.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL28CalcHourglassControlForElemsR6DomainPdd_l1080",
+                              "HashName": "__omp_offloading_821_710ab97__ZL28CalcHourglassControlForElemsR6DomainPdd_l1080",
+                              "NumRegs": 162,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 5664799.5,
+                              "Metrics": {
+                                    "GLoads": 1114112.0,
+                                    "GStores": 1605632.0,
+                                    "Occupancy": 18.6378231048584,
+                                    "BranchEfficiency": 50.0
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL28CalcMonotonicQRegionForElemsR6DomainPdd_l2103.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL28CalcMonotonicQRegionForElemsR6DomainPdd_l2103",
+                              "HashName": "__omp_offloading_821_710ab97__ZL28CalcMonotonicQRegionForElemsR6DomainPdd_l2103",
+                              "NumRegs": 46,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 909677.5,
+                              "Metrics": {
+                                    "GLoads": 742222.625,
+                                    "GStores": 65536.0,
+                                    "Occupancy": 48.50623321533203,
+                                    "BranchEfficiency": 49.251747131347656
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL31CalcMonotonicQGradientsForElemsR6DomainPd_l1913.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL31CalcMonotonicQGradientsForElemsR6DomainPd_l1913",
+                              "HashName": "__omp_offloading_821_710ab97__ZL31CalcMonotonicQGradientsForElemsR6DomainPd_l1913",
+                              "NumRegs": 122,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 2712965.5,
+                              "Metrics": {
+                                    "GLoads": 1900544.0,
+                                    "GStores": 196608.0,
+                                    "Occupancy": 24.690343856811523,
+                                    "BranchEfficiency": 50.0
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ab97__ZL43ApplyAccelerationBoundaryConditionsForNodesR6Domain_l1312.json": {
+                              "Name": "__omp_offloading_821_710ab97__ZL43ApplyAccelerationBoundaryConditionsForNodesR6Domain_l1312",
+                              "HashName": "__omp_offloading_821_710ab97__ZL43ApplyAccelerationBoundaryConditionsForNodesR6Domain_l1312",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 131,
+                              "NumThreads": 128,
+                              "ExecTime": 10717.021484375,
+                              "Metrics": {
+                                    "GLoads": 781.5,
+                                    "GStores": 781.5,
+                                    "Occupancy": 19.919239044189453,
+                                    "BranchEfficiency": 49.9913215637207
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/LULESH/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        }
+                  }
+            }
+      }
+}

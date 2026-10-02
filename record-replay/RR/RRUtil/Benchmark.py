@@ -25,6 +25,8 @@ from RRUtil.Utilities import execute_command
 from RRUtil.DataBase import DB
 
 class Kernel:
+    MeasurementSchema = 'device-kernel-timing-v2'
+
     class OMPReplayer:
         def __init__(self, MaxMem):
             self.envVars = {
@@ -49,10 +51,12 @@ class Kernel:
                 cmd += f' --verify'
             return cmd + ' {kernel_name}.json'
 
-        def env(self, profile_metrics=True, profile_activities=True):
+        def env(self, profile_metrics=True, profile_activities=True,
+                profile_timing=False):
             env_vars = dict(self.envVars)
             env_vars['LIBOMPTARGET_RR_PROFILE_METRICS'] = int(profile_metrics)
             env_vars['LIBOMPTARGET_RR_PROFILE_ACTIVITIES'] = int(profile_activities)
+            env_vars['LIBOMPTARGET_RR_PROFILE_TIMING'] = int(profile_timing)
             return ' '.join([f'{k}={v}' for k,v in env_vars.items()])
 
     def __init__(self, Device, name, hashname, dbDir, recorded=True):
@@ -201,6 +205,7 @@ class Kernel:
 
             defaultKey = self.getDefaultKey()
             db = DB(self.getDBName(**kwargs), defaultKey)
+            db.setMeasurementSchema(self.MeasurementSchema)
 
             # Get data for baseline.
             if not (defaultKey in db):
@@ -321,19 +326,19 @@ class Kernel:
             #We should not include pure 0. We always require at least a single element
             MinTeams = kwargs.get('MinTeams', None)
             if MinTeams is not None:
-                pBounds['MinTeams'] = (np.nextafter(0,1), np.nextafter(1, 2))
+                pBounds['MinTeams'] = (np.nextafter(0,1), 1.0)
 
             MaxThreads = kwargs.get('MaxThreads', None)
             if MaxThreads is not None:
-                pBounds['MaxThreads'] = (np.nextafter(0, 1), np.nextafter(1, 2))
+                pBounds['MaxThreads'] = (np.nextafter(0, 1), 1.0)
 
             NumThreads = kwargs.get('NumThreads', None)
             if NumThreads is not None:
-                pBounds['NumThreads'] = (np.nextafter(0, 1), np.nextafter(1, 2))
+                pBounds['NumThreads'] = (np.nextafter(0, 1), 1.0)
 
             NumTeams = kwargs.get('NumTeams', None)
             if NumTeams is not None:
-                pBounds['NumTeams'] = (np.nextafter(0, 1), np.nextafter(1, 2))
+                pBounds['NumTeams'] = (np.nextafter(0, 1), 1.0)
         else:
             NumThreads = kwargs.get('NumThreads', None)
             if not isinstance(NumThreads, type(None)):
@@ -403,6 +408,7 @@ class Kernel:
             utility = UtilityFunction(kind = "ucb", kappa = 1.96, xi = 0.01)
 
             db = DB(self.getDBName(**kwargs), self.getDefaultKey())
+            db.setMeasurementSchema(self.MeasurementSchema)
             stats_file = f'{self.dbDir}/results_{self.HashName}.csv'
 
             stats = [] 
@@ -422,7 +428,16 @@ class Kernel:
             pending = optSamples + initSamples
 
             for performed in range (0, pending):
-                if performed < (initSamples +1):
+                # Always evaluate the full launch-bound point. Important
+                # configurations such as a full thread block occupy only a
+                # narrow interval after fractional values are rounded to warp
+                # sizes, so purely random initialization frequently misses
+                # them and leaves the optimizer with only near-baseline data.
+                if performed == 0:
+                    NextPoint = {
+                        name: bounds[1] for name, bounds in pBounds.items()
+                    }
+                elif performed < initSamples:
                     NextPoint = optimizer.space.array_to_params(optimizer.space.random_sample())
                 else:
                     NextPoint = optimizer.suggest(utility)
@@ -497,9 +512,6 @@ class Kernel:
         res, durations, energies, GLoads, GStores = self.execute(
             NumThreads, NumTeams, device_handle=device_handle, maxIters=Tries)
         if len(res) == 0:
-            end = time.time()
-            #end energy here
-            end_energy = nvmlEnergy(device_handle)
             return False, None, None, None, None, None, None
 
         DStats += res
@@ -514,9 +526,12 @@ class Kernel:
                 keepMaxTeam=True, dropSingleTeams=False, device_handle=None):
         #TODO: replace reference to nvprof in command()
         cmd = self.Replayer.command(NumThreads, NumTeams).format(kernel_name=f'{self.HashName}')
-        metrics_env = self.Replayer.env(profile_metrics=True, profile_activities=True)
-        timing_env = self.Replayer.env(profile_metrics=False, profile_activities=False)
-        
+        metrics_env = self.Replayer.env(profile_metrics=True,
+                                        profile_activities=True)
+        timing_env = self.Replayer.env(profile_metrics=False,
+                                       profile_activities=False,
+                                       profile_timing=True)
+
         #cmd = self.Profiler.command().format(executable=cmd, output=f'{self.HashName}.csv')
         #env += ' ' + self.Profiler.env()
         results = []
@@ -540,7 +555,13 @@ class Kernel:
             if ret != 0:
                 activities_file.unlink(missing_ok=True)
                 return [], [], [], [], []
-            durations.append(end - start)
+            timing_match = re.search(
+                r'\|\|ReplayTiming\|\| duration_seconds: ([-+0-9.eE]+)',
+                stdout)
+            if timing_match is None:
+                print('Replay did not report a device kernel duration')
+                return [], [], [], [], []
+            durations.append(float(timing_match.group(1)))
             energies.append((end_energy - start_energy) if device_handle is not None else 0)
 
         # Metrics are deterministic enough for optimization and expensive to
@@ -725,10 +746,12 @@ class BaseBenchmark(ABC):
         def command(self):
             return self.cmd
 
-        def env(self, profile_metrics=True, profile_activities=True):
+        def env(self, profile_metrics=True, profile_activities=True,
+                profile_timing=False):
             env_vars = dict(self.envVars)
             env_vars['LIBOMPTARGET_RR_PROFILE_METRICS'] = int(profile_metrics)
             env_vars['LIBOMPTARGET_RR_PROFILE_ACTIVITIES'] = int(profile_activities)
+            env_vars['LIBOMPTARGET_RR_PROFILE_TIMING'] = int(profile_timing)
             return ' '.join([f'{k}={v}' for k,v in env_vars.items()])
 
         def threads(self):

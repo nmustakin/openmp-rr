@@ -1,0 +1,184 @@
+{
+  "date": "2026-10-01",
+  "benchmark": "miniFE, 200 x 200 x 200",
+  "scenario": "BOMN",
+  "objective": "speedup",
+  "init_samples": 5,
+  "opt_samples": 30,
+  "exit_code": 0,
+  "kernels": [
+    {
+      "kernel": "__omp_offloading_77fd1a2e54a5cb40_l521.json",
+      "function": "__omp_offloading_821_710ac4b__ZN6miniFE10matvec_stdINS_9CSRMatrixIdiiEENS_6VectorIdiiEEEclERS2_RS4_S7__l521",
+      "evaluations": 35,
+      "new_configuration_attempts": 18,
+      "reused_evaluations": 17,
+      "invalid_evaluations": 2,
+      "best_speedup": 1.3840102916539765,
+      "best_configuration": {
+        "MaxThreads": "32",
+        "MinTeams": "1",
+        "NumThreads": "32",
+        "NumTeams": "87781",
+        "DeviceID": "0"
+      },
+      "normalized_best_point": {
+        "MaxThreads": 5e-324,
+        "MinTeams": 5e-324,
+        "NumTeams": 0.3459063044206807,
+        "NumThreads": 1.0
+      },
+      "baseline_seconds": 0.022555532439999998,
+      "best_seconds": 0.01629722884
+    },
+    {
+      "kernel": "__omp_offloading_438ba414cd6d9afc_l254.json",
+      "function": "__omp_offloading_821_710ac4d__ZN6miniFE3dotINS_6VectorIdiiEEEENS_10TypeTraitsINT_10ScalarTypeEE14magnitude_typeERKS4_S9__l254",
+      "evaluations": 35,
+      "new_configuration_attempts": 24,
+      "reused_evaluations": 11,
+      "invalid_evaluations": 0,
+      "best_speedup": 1.1080021409231593,
+      "best_configuration": {
+        "MaxThreads": "32",
+        "MinTeams": "21",
+        "NumThreads": "32",
+        "NumTeams": "5367",
+        "DeviceID": "0"
+      },
+      "normalized_best_point": {
+        "MaxThreads": 0.027703594018451502,
+        "MinTeams": 0.6350569158477845,
+        "NumTeams": 0.021147520511802582,
+        "NumThreads": 0.42571397153379337
+      },
+      "baseline_seconds": 0.002042163158,
+      "best_seconds": 0.001843103982
+    },
+    {
+      "kernel": "__omp_offloading_bfdde06a12fc8e0a_l205.json",
+      "function": "__omp_offloading_821_710ac4d__ZN6miniFE6daxpbyINS_6VectorIdiiEEEEvdRKT_dRS3__l205",
+      "evaluations": 35,
+      "new_configuration_attempts": 24,
+      "reused_evaluations": 11,
+      "invalid_evaluations": 0,
+      "best_speedup": 1.0564428909436125,
+      "best_configuration": {
+        "MaxThreads": "96",
+        "MinTeams": "10",
+        "NumThreads": "96",
+        "NumTeams": "45930",
+        "DeviceID": "0"
+      },
+      "normalized_best_point": {
+        "MaxThreads": 0.07465943393206285,
+        "MinTeams": 0.9152704452825795,
+        "NumTeams": 0.542963887792084,
+        "NumThreads": 0.7415045735128125
+      },
+      "baseline_seconds": 0.001018924784,
+      "best_seconds": 0.0009644863842
+    },
+    {
+      "kernel": "__omp_offloading_bfdde06a12fc8e0a_l210.json",
+      "function": "__omp_offloading_821_710ac4d__ZN6miniFE6daxpbyINS_6VectorIdiiEEEEvdRKT_dRS3__l210",
+      "evaluations": 35,
+      "new_configuration_attempts": 14,
+      "reused_evaluations": 21,
+      "invalid_evaluations": 1,
+      "best_speedup": 1.0531761435921847,
+      "best_configuration": {
+        "MaxThreads": "960",
+        "MinTeams": "1",
+        "NumThreads": "128",
+        "NumTeams": "49458",
+        "DeviceID": "0"
+      },
+      "normalized_best_point": {
+        "MaxThreads": 0.9344810300513757,
+        "MinTeams": 0.022530961061919763,
+        "NumTeams": 0.7795652182387106,
+        "NumThreads": 0.12498999885595707
+      },
+      "baseline_seconds": 0.00101162877,
+      "best_seconds": 0.0009605504038
+    },
+    {
+      "kernel": "__omp_offloading_2bb0674bd3f2629c_l290.json",
+      "function": "__omp_offloading_821_710ac4d__ZN6miniFE6dot_r2INS_6VectorIdiiEEEENS_10TypeTraitsINT_10ScalarTypeEE14magnitude_typeERKS4__l290",
+      "evaluations": 35,
+      "new_configuration_attempts": 24,
+      "reused_evaluations": 11,
+      "invalid_evaluations": 0,
+      "best_speedup": 1.072243504311116,
+      "best_configuration": {
+        "MaxThreads": "288",
+        "MinTeams": "3",
+        "NumThreads": "32",
+        "NumTeams": "19486",
+        "DeviceID": "0"
+      },
+      "normalized_best_point": {
+        "MaxThreads": 0.2665800393313697,
+        "MinTeams": 1.0,
+        "NumTeams": 0.07678304128325573,
+        "NumThreads": 5e-324
+      },
+      "baseline_seconds": 0.00196323843,
+      "best_seconds": 0.00183096323
+    },
+    {
+      "kernel": "__omp_offloading_6793fdf12c96c9b4_l157.json",
+      "function": "__omp_offloading_821_710ac4d__ZN6miniFE6waxpbyINS_6VectorIdiiEEEEvNT_10ScalarTypeERKS3_S4_S6_RS3__l157",
+      "evaluations": 35,
+      "new_configuration_attempts": 24,
+      "reused_evaluations": 11,
+      "invalid_evaluations": 0,
+      "best_speedup": 1.0366669676520954,
+      "best_configuration": {
+        "MaxThreads": "576",
+        "MinTeams": "1",
+        "NumThreads": "128",
+        "NumTeams": "28292",
+        "DeviceID": "0"
+      },
+      "normalized_best_point": {
+        "MaxThreads": 0.5356296012504254,
+        "MinTeams": 0.9485923208762348,
+        "NumTeams": 0.4459469646764779,
+        "NumThreads": 0.21020844284186171
+      },
+      "baseline_seconds": 0.0008001343964,
+      "best_seconds": 0.0007718335988
+    },
+    {
+      "kernel": "__omp_offloading_6793fdf12c96c9b4_l169.json",
+      "function": "__omp_offloading_821_710ac4d__ZN6miniFE6waxpbyINS_6VectorIdiiEEEEvNT_10ScalarTypeERKS3_S4_S6_RS3__l169",
+      "evaluations": 35,
+      "new_configuration_attempts": 22,
+      "reused_evaluations": 13,
+      "invalid_evaluations": 0,
+      "best_speedup": 1.0517016045509777,
+      "best_configuration": {
+        "MaxThreads": "384",
+        "MinTeams": "2",
+        "NumThreads": "192",
+        "NumTeams": "41295",
+        "DeviceID": "0"
+      },
+      "normalized_best_point": {
+        "MaxThreads": 0.36184313229505183,
+        "MinTeams": 0.8156379384027628,
+        "NumTeams": 0.976345578098789,
+        "NumThreads": 0.4876772235535938
+      },
+      "baseline_seconds": 0.001009862398,
+      "best_seconds": 0.000960217607
+    }
+  ],
+  "notes": [
+    "Existing miniFE recording and compatible cached measurements were reused.",
+    "Speedups compare replay kernel durations with cached per-kernel baselines; these are not end-to-end application speedups.",
+    "Each new valid configuration uses five timing replays and a separate metrics replay."
+  ]
+}

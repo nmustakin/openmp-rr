@@ -1,0 +1,168 @@
+{
+  "date": "2026-10-01",
+  "benchmark": "miniFE 200 x 200 x 200",
+  "scenario": "BOMN",
+  "objective": "speedup",
+  "init_samples": 30,
+  "opt_samples": 200,
+  "exit_code": 0,
+  "total_evaluations": 1610,
+  "new_configuration_attempts": 0,
+  "reused_evaluations": 1610,
+  "kernels": [
+    {
+      "kernel": "__omp_offloading_77fd1a2e54a5cb40_l521.json",
+      "label": "matvec (521)",
+      "best_speedup": 1.4527345178185302,
+      "best_configuration": {
+        "MaxThreads": "512",
+        "MinTeams": "1",
+        "NumThreads": "96",
+        "NumTeams": "73664",
+        "DeviceID": "0"
+      },
+      "normalized_best_point": {
+        "MaxThreads": 0.4799393355072743,
+        "MinTeams": 0.06895079210821682,
+        "NumTeams": 0.8708394395328105,
+        "NumThreads": 0.1544562400313506
+      },
+      "evaluations": 230,
+      "new_configuration_attempts": 0,
+      "reused_evaluations": 230,
+      "new_database_entries": 0
+    },
+    {
+      "kernel": "__omp_offloading_438ba414cd6d9afc_l254.json",
+      "label": "dot (254)",
+      "best_speedup": 1.177420420908446,
+      "best_configuration": {
+        "MaxThreads": "96",
+        "MinTeams": "1",
+        "NumThreads": "96",
+        "NumTeams": "4372",
+        "DeviceID": "0"
+      },
+      "normalized_best_point": {
+        "MaxThreads": 0.06380999921834028,
+        "MinTeams": 5e-324,
+        "NumTeams": 0.05167608251758425,
+        "NumThreads": 0.7646554588687021
+      },
+      "evaluations": 230,
+      "new_configuration_attempts": 0,
+      "reused_evaluations": 230,
+      "new_database_entries": 0
+    },
+    {
+      "kernel": "__omp_offloading_bfdde06a12fc8e0a_l205.json",
+      "label": "daxpby (205)",
+      "best_speedup": 1.0583460489529624,
+      "best_configuration": {
+        "MaxThreads": "256",
+        "MinTeams": "3",
+        "NumThreads": "192",
+        "NumTeams": "31261",
+        "DeviceID": "0"
+      },
+      "normalized_best_point": {
+        "MaxThreads": 0.2489495969456609,
+        "MinTeams": 0.7174032156079876,
+        "NumTeams": 0.7391116427424408,
+        "NumThreads": 0.639211799440922
+      },
+      "evaluations": 230,
+      "new_configuration_attempts": 0,
+      "reused_evaluations": 230,
+      "new_database_entries": 0
+    },
+    {
+      "kernel": "__omp_offloading_bfdde06a12fc8e0a_l210.json",
+      "label": "daxpby (210)",
+      "best_speedup": 1.0546869923124154,
+      "best_configuration": {
+        "MaxThreads": "256",
+        "MinTeams": "3",
+        "NumThreads": "128",
+        "NumTeams": "61314",
+        "DeviceID": "0"
+      },
+      "normalized_best_point": {
+        "MaxThreads": 0.22906521680820224,
+        "MinTeams": 0.7429898711666939,
+        "NumTeams": 0.9664515991888468,
+        "NumThreads": 0.4449628876361055
+      },
+      "evaluations": 230,
+      "new_configuration_attempts": 0,
+      "reused_evaluations": 230,
+      "new_database_entries": 0
+    },
+    {
+      "kernel": "__omp_offloading_2bb0674bd3f2629c_l290.json",
+      "label": "dot_r2 (290)",
+      "best_speedup": 1.1533958323066587,
+      "best_configuration": {
+        "MaxThreads": "64",
+        "MinTeams": "2",
+        "NumThreads": "64",
+        "NumTeams": "14712",
+        "DeviceID": "0"
+      },
+      "normalized_best_point": {
+        "MaxThreads": 0.03419450478686663,
+        "MinTeams": 0.06906990108563539,
+        "NumTeams": 0.11594243446208992,
+        "NumThreads": 1.0
+      },
+      "evaluations": 230,
+      "new_configuration_attempts": 0,
+      "reused_evaluations": 230,
+      "new_database_entries": 0
+    },
+    {
+      "kernel": "__omp_offloading_6793fdf12c96c9b4_l157.json",
+      "label": "waxpby (157)",
+      "best_speedup": 1.0320628612621467,
+      "best_configuration": {
+        "MaxThreads": "192",
+        "MinTeams": "4",
+        "NumThreads": "128",
+        "NumTeams": "20971",
+        "DeviceID": "0"
+      },
+      "normalized_best_point": {
+        "MaxThreads": 0.1649497354571394,
+        "MinTeams": 0.6175006392942483,
+        "NumTeams": 0.3305436425162529,
+        "NumThreads": 0.5430662744520816
+      },
+      "evaluations": 230,
+      "new_configuration_attempts": 0,
+      "reused_evaluations": 230,
+      "new_database_entries": 0
+    },
+    {
+      "kernel": "__omp_offloading_6793fdf12c96c9b4_l169.json",
+      "label": "waxpby (169)",
+      "best_speedup": 1.0545412070303417,
+      "best_configuration": {
+        "MaxThreads": "320",
+        "MinTeams": "1",
+        "NumThreads": "160",
+        "NumTeams": "49789",
+        "DeviceID": "0"
+      },
+      "normalized_best_point": {
+        "MaxThreads": 0.3052703770365375,
+        "MinTeams": 0.29810330112815436,
+        "NumTeams": 0.9809803694392976,
+        "NumThreads": 0.46556105468080144
+      },
+      "evaluations": 230,
+      "new_configuration_attempts": 0,
+      "reused_evaluations": 230,
+      "new_database_entries": 0
+    }
+  ]
+}

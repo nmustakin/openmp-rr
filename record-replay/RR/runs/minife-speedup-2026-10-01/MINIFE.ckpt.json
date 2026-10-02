@@ -1,0 +1,327 @@
+{
+      "executable": "miniFE.x",
+      "resultsdir": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+      "root": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/benchmarks/miniFE-omp",
+      "Profiler": {
+            "Name": "nvidia",
+            "Capability": 7.5
+      },
+      "versions": {
+            "record": {
+                  "name": "record",
+                  "BuildTime": 15.135769844055176,
+                  "OuterTime": 719.422349691391,
+                  "InnerTime": "716.756",
+                  "BuildEnergy": 150089,
+                  "OuterEnergy": 40437655,
+                  "ExecutableDir": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/execute/MINIFE/nvidia/build",
+                  "Kernels": {
+                        "__omp_offloading_77fd1a2e54a5cb40_l521.json": {
+                              "Name": "__omp_offloading_821_710ac4b__ZN6miniFE10matvec_stdINS_9CSRMatrixIdiiEENS_6VectorIdiiEEEclERS2_RS4_S7__l521",
+                              "HashName": "__omp_offloading_77fd1a2e54a5cb40_l521",
+                              "NumRegs": 64,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 23146642.0,
+                                    "GStores": 253769.0,
+                                    "Occupancy": 98.71527099609375,
+                                    "BranchEfficiency": 98.20487213134766
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_438ba414cd6d9afc_l254.json": {
+                              "Name": "__omp_offloading_821_710ac4d__ZN6miniFE3dotINS_6VectorIdiiEEEENS_10TypeTraitsINT_10ScalarTypeEE14magnitude_typeERKS4_S9__l254",
+                              "HashName": "__omp_offloading_438ba414cd6d9afc_l254",
+                              "NumRegs": 56,
+                              "SMem": 1728.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 510739.0,
+                                    "GStores": 6403.0,
+                                    "Occupancy": 97.64320373535156,
+                                    "BranchEfficiency": 99.93869018554688
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_bfdde06a12fc8e0a_l205.json": {
+                              "Name": "__omp_offloading_821_710ac4d__ZN6miniFE6daxpbyINS_6VectorIdiiEEEEvdRKT_dRS3__l205",
+                              "HashName": "__omp_offloading_bfdde06a12fc8e0a_l205",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 507538.0,
+                                    "GStores": 253769.0,
+                                    "Occupancy": 98.1314468383789,
+                                    "BranchEfficiency": 99.99996185302734
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_bfdde06a12fc8e0a_l210.json": {
+                              "Name": "__omp_offloading_821_710ac4d__ZN6miniFE6daxpbyINS_6VectorIdiiEEEEvdRKT_dRS3__l210",
+                              "HashName": "__omp_offloading_bfdde06a12fc8e0a_l210",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 507538.0,
+                                    "GStores": 253769.0,
+                                    "Occupancy": 98.03324890136719,
+                                    "BranchEfficiency": 99.99996185302734
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_2bb0674bd3f2629c_l290.json": {
+                              "Name": "__omp_offloading_821_710ac4d__ZN6miniFE6dot_r2INS_6VectorIdiiEEEENS_10TypeTraitsINT_10ScalarTypeEE14magnitude_typeERKS4__l290",
+                              "HashName": "__omp_offloading_2bb0674bd3f2629c_l290",
+                              "NumRegs": 56,
+                              "SMem": 1728.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 256970.0,
+                                    "GStores": 6403.0,
+                                    "Occupancy": 97.7077407836914,
+                                    "BranchEfficiency": 99.93868255615234
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_6793fdf12c96c9b4_l157.json": {
+                              "Name": "__omp_offloading_821_710ac4d__ZN6miniFE6waxpbyINS_6VectorIdiiEEEEvNT_10ScalarTypeERKS3_S4_S6_RS3__l157",
+                              "HashName": "__omp_offloading_6793fdf12c96c9b4_l157",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 253769.0,
+                                    "GStores": 253769.0,
+                                    "Occupancy": 97.81632995605469,
+                                    "BranchEfficiency": 99.99996185302734
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        },
+                        "__omp_offloading_6793fdf12c96c9b4_l169.json": {
+                              "Name": "__omp_offloading_821_710ac4d__ZN6miniFE6waxpbyINS_6VectorIdiiEEEEvNT_10ScalarTypeERKS3_S4_S6_RS3__l169",
+                              "HashName": "__omp_offloading_6793fdf12c96c9b4_l169",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "Metrics": {
+                                    "GLoads": 507538.0,
+                                    "GStores": 253769.0,
+                                    "Occupancy": 98.06893157958984,
+                                    "BranchEfficiency": 99.99996185302734
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        }
+                  }
+            },
+            "original": {
+                  "name": "original",
+                  "BuildTime": 15.135769844055176,
+                  "OuterTime": 26.71353840827942,
+                  "InnerTime": "26.1836",
+                  "BuildEnergy": 150089,
+                  "OuterEnergy": 943281,
+                  "ExecutableDir": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/execute/MINIFE/nvidia/build",
+                  "Kernels": {
+                        "__omp_offloading_821_710ac4b__ZN6miniFE10matvec_stdINS_9CSRMatrixIdiiEENS_6VectorIdiiEEEclERS2_RS4_S7__l521.json": {
+                              "Name": "__omp_offloading_821_710ac4b__ZN6miniFE10matvec_stdINS_9CSRMatrixIdiiEENS_6VectorIdiiEEEclERS2_RS4_S7__l521",
+                              "HashName": "__omp_offloading_821_710ac4b__ZN6miniFE10matvec_stdINS_9CSRMatrixIdiiEENS_6VectorIdiiEEEclERS2_RS4_S7__l521",
+                              "NumRegs": 64,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 10795412.0,
+                              "Metrics": {
+                                    "GLoads": 11573321.0,
+                                    "GStores": 126884.5,
+                                    "Occupancy": 49.357635498046875,
+                                    "BranchEfficiency": 49.10243606567383
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ac4d__ZN6miniFE3dotINS_6VectorIdiiEEEENS_10TypeTraitsINT_10ScalarTypeEE14magnitude_typeERKS4_S9__l254.json": {
+                              "Name": "__omp_offloading_821_710ac4d__ZN6miniFE3dotINS_6VectorIdiiEEEENS_10TypeTraitsINT_10ScalarTypeEE14magnitude_typeERKS4_S9__l254",
+                              "HashName": "__omp_offloading_821_710ac4d__ZN6miniFE3dotINS_6VectorIdiiEEEENS_10TypeTraitsINT_10ScalarTypeEE14magnitude_typeERKS4_S9__l254",
+                              "NumRegs": 56,
+                              "SMem": 1728.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 601268.9375,
+                              "Metrics": {
+                                    "GLoads": 255369.5,
+                                    "GStores": 3201.5,
+                                    "Occupancy": 48.82160186767578,
+                                    "BranchEfficiency": 49.96934509277344
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ac4d__ZN6miniFE6daxpbyINS_6VectorIdiiEEEEvdRKT_dRS3__l205.json": {
+                              "Name": "__omp_offloading_821_710ac4d__ZN6miniFE6daxpbyINS_6VectorIdiiEEEEvdRKT_dRS3__l205",
+                              "HashName": "__omp_offloading_821_710ac4d__ZN6miniFE6daxpbyINS_6VectorIdiiEEEEvdRKT_dRS3__l205",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 384902.09375,
+                              "Metrics": {
+                                    "GLoads": 253769.0,
+                                    "GStores": 126884.5,
+                                    "Occupancy": 49.06572341918945,
+                                    "BranchEfficiency": 49.99998092651367
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ac4d__ZN6miniFE6daxpbyINS_6VectorIdiiEEEEvdRKT_dRS3__l210.json": {
+                              "Name": "__omp_offloading_821_710ac4d__ZN6miniFE6daxpbyINS_6VectorIdiiEEEEvdRKT_dRS3__l210",
+                              "HashName": "__omp_offloading_821_710ac4d__ZN6miniFE6daxpbyINS_6VectorIdiiEEEEvdRKT_dRS3__l210",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 384231.0,
+                              "Metrics": {
+                                    "GLoads": 253769.0,
+                                    "GStores": 126884.5,
+                                    "Occupancy": 49.016624450683594,
+                                    "BranchEfficiency": 49.99998092651367
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ac4d__ZN6miniFE6dot_r2INS_6VectorIdiiEEEENS_10TypeTraitsINT_10ScalarTypeEE14magnitude_typeERKS4__l290.json": {
+                              "Name": "__omp_offloading_821_710ac4d__ZN6miniFE6dot_r2INS_6VectorIdiiEEEENS_10TypeTraitsINT_10ScalarTypeEE14magnitude_typeERKS4__l290",
+                              "HashName": "__omp_offloading_821_710ac4d__ZN6miniFE6dot_r2INS_6VectorIdiiEEEENS_10TypeTraitsINT_10ScalarTypeEE14magnitude_typeERKS4__l290",
+                              "NumRegs": 56,
+                              "SMem": 1728.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 603234.25,
+                              "Metrics": {
+                                    "GLoads": 128485.0,
+                                    "GStores": 3201.5,
+                                    "Occupancy": 48.8538703918457,
+                                    "BranchEfficiency": 49.96934127807617
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ac4d__ZN6miniFE6waxpbyINS_6VectorIdiiEEEEvNT_10ScalarTypeERKS3_S4_S6_RS3__l157.json": {
+                              "Name": "__omp_offloading_821_710ac4d__ZN6miniFE6waxpbyINS_6VectorIdiiEEEEvNT_10ScalarTypeERKS3_S4_S6_RS3__l157",
+                              "HashName": "__omp_offloading_821_710ac4d__ZN6miniFE6waxpbyINS_6VectorIdiiEEEEvNT_10ScalarTypeERKS3_S4_S6_RS3__l157",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 269573.5,
+                              "Metrics": {
+                                    "GLoads": 126884.5,
+                                    "GStores": 126884.5,
+                                    "Occupancy": 48.908164978027344,
+                                    "BranchEfficiency": 49.99998092651367
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        },
+                        "__omp_offloading_821_710ac4d__ZN6miniFE6waxpbyINS_6VectorIdiiEEEEvNT_10ScalarTypeERKS3_S4_S6_RS3__l169.json": {
+                              "Name": "__omp_offloading_821_710ac4d__ZN6miniFE6waxpbyINS_6VectorIdiiEEEEvNT_10ScalarTypeERKS3_S4_S6_RS3__l169",
+                              "HashName": "__omp_offloading_821_710ac4d__ZN6miniFE6waxpbyINS_6VectorIdiiEEEEvNT_10ScalarTypeERKS3_S4_S6_RS3__l169",
+                              "NumRegs": 32,
+                              "SMem": 1584.0,
+                              "NumTeams": 3200,
+                              "NumThreads": 128,
+                              "ExecTime": 385276.5,
+                              "Metrics": {
+                                    "GLoads": 253769.0,
+                                    "GStores": 126884.5,
+                                    "Occupancy": 49.03446578979492,
+                                    "BranchEfficiency": 49.99998092651367
+                              },
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/MINIFE/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        }
+                  }
+            }
+      }
+}

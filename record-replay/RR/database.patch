@@ -1,0 +1,100 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/record-replay/RR/RRUtil/DataBase.py b/record-replay/RR/RRUtil/DataBase.py
+index b12d49153606769e393b1a6640826e606371bca1..65888edfef7eeaad9b9242dd18db9770211eda71 100644
+--- a/record-replay/RR/RRUtil/DataBase.py
++++ b/record-replay/RR/RRUtil/DataBase.py
+@@ -1,59 +1,87 @@
+ import json
++import os
+ from pathlib import Path
++import tempfile
++import time
++import warnings
+ import numpy as np
+ 
+ class DB:
+     def __init__(self, fn, defaultKey):
+         # Get full path of database
+         self.fn = str(Path(fn).resolve())
+         self.Data = dict()
+         self.MetaData = dict()
+         self.DefaultExecTime = None
+         self.DefaultExecEnergy = None
+         self.DefaultLoads = None
+         self.DefaultStores = None
+         self.Default = defaultKey
+ 
+         Data = { 'MetaData' : {} , 'Stats' : {} }
+         if Path(self.fn).exists():
+             #print("Json file: ", self.fn)
+-            with open(self.fn, 'r') as fd:
+-                Data = json.load(fd)
++            try:
++                with open(self.fn, 'r') as fd:
++                    Data = json.load(fd)
++            except json.JSONDecodeError as error:
++                corrupt_path = Path(
++                    f'{self.fn}.corrupt-{time.time_ns()}')
++                Path(self.fn).replace(corrupt_path)
++                warnings.warn(
++                    f'Optimization database {self.fn} is not valid JSON '
++                    f'({error}). It was moved to {corrupt_path}; starting a '
++                    'new database.', RuntimeWarning)
+ 
+         self.Data = Data['Stats']
+         self.MetaData = Data['MetaData']
+         #If some execution uses some previous DB format
+         #count is not recorded. Add in the DB, to match the
+         #new format
+ 
+         self.Baseline()
+ 
+     def Update(self):
+         Data = { 'MetaData' : self.MetaData , 'Stats' : self.Data }
+-        with open(self.fn, 'w') as fd:
+-            json.dump(Data, fd, indent = 6)
++        destination = Path(self.fn)
++        temporary_name = None
++        try:
++            # Write beside the database so os.replace remains atomic even when
++            # the execution directory is on a different filesystem.
++            with tempfile.NamedTemporaryFile(
++                    mode='w', dir=destination.parent,
++                    prefix=f'.{destination.name}.', suffix='.tmp',
++                    delete=False) as fd:
++                temporary_name = fd.name
++                json.dump(Data, fd, indent=6)
++                fd.flush()
++                os.fsync(fd.fileno())
++            os.replace(temporary_name, destination)
++        finally:
++            if temporary_name is not None:
++                Path(temporary_name).unlink(missing_ok=True)
+ 
+     def getTotalSize(self):
+         if not self.MetaData:
+             return -1
+         return self.MetaData['totalExperiments']
+ 
+     def setMetadata(self, mData):
+         self.MetaData = mData
+         self.Update()
+ 
+     def __len__(self):
+         count = 0
+         for k, v in self.Data.items():
+             count += v['count']
+         return count
+ 
+     def getBaseline(self):
+         if self.Default in self.Data:
+             return self.Duration(self.Default)
+ 
+     def getBaselineEnergy(self):
+         if self.Default in self.Data:
+             return self.Energy(self.Default)
+ 
+     def Baseline(self):
+ 
+EOF
+)

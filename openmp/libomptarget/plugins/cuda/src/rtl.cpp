@@ -109,6 +109,11 @@ bool profileActivitiesEnabled() {
   return !ActivitiesEnv || std::string(ActivitiesEnv) != "0";
 }
 
+bool profileTimingEnabled() {
+  const char *TimingEnv = getenv("LIBOMPTARGET_RR_PROFILE_TIMING");
+  return TimingEnv && std::string(TimingEnv) != "0";
+}
+
 bool checkResult(CUresult Err, const char *ErrMsg) {
   if (Err == CUDA_SUCCESS)
     return true;
@@ -1252,6 +1257,23 @@ public:
     CUstream Stream = getStream(DeviceId, AsyncInfo);
     
     const bool ProfileMetrics = profileMetricsEnabled();
+    const bool ProfileTiming = profileTimingEnabled();
+    CUevent TimingStart = nullptr;
+    CUevent TimingStop = nullptr;
+    if (ProfileTiming) {
+      if (!checkResult(cuEventCreate(&TimingStart, CU_EVENT_DEFAULT),
+                       "Error returned from cuEventCreate\n") ||
+          !checkResult(cuEventCreate(&TimingStop, CU_EVENT_DEFAULT),
+                       "Error returned from cuEventCreate\n") ||
+          !checkResult(cuEventRecord(TimingStart, Stream),
+                       "Error returned from cuEventRecord\n")) {
+        if (TimingStart)
+          cuEventDestroy(TimingStart);
+        if (TimingStop)
+          cuEventDestroy(TimingStop);
+        return OFFLOAD_FAIL;
+      }
+    }
     std::vector<std::string> MetricNames;
     std::vector<std::string> MetricIDs;
     if (ProfileMetrics) {
@@ -1275,6 +1297,21 @@ public:
                          /* gridDimZ */ 1, CudaThreadsPerBlock,
                          /* blockDimY */ 1, /* blockDimZ */ 1,
                          DynamicMemorySize, Stream, &Args[0], nullptr);
+
+    if (ProfileTiming && Err == CUDA_SUCCESS) {
+      Err = cuEventRecord(TimingStop, Stream);
+      if (Err == CUDA_SUCCESS)
+        Err = cuEventSynchronize(TimingStop);
+      float DurationMs = 0.0f;
+      if (Err == CUDA_SUCCESS)
+        Err = cuEventElapsedTime(&DurationMs, TimingStart, TimingStop);
+      if (Err == CUDA_SUCCESS)
+        printf("||ReplayTiming|| duration_seconds: %.9g\n", DurationMs / 1.0e3);
+    }
+    if (ProfileTiming) {
+      cuEventDestroy(TimingStart);
+      cuEventDestroy(TimingStop);
+    }
 
     if (!checkResult(Err, "Error returned from cuLaunchKernel\n"))
       return OFFLOAD_FAIL;

@@ -1,0 +1,63 @@
+{
+      "executable": "vecAdd",
+      "resultsdir": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/TEST/nvidia",
+      "root": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/benchmarks/vAdd",
+      "Profiler": {
+            "Name": "nvidia",
+            "Capability": 7.5
+      },
+      "versions": {
+            "record": {
+                  "name": "record",
+                  "BuildTime": 2.0521204471588135,
+                  "OuterTime": 2.1934070587158203,
+                  "InnerTime": "1.68026",
+                  "BuildEnergy": 19773,
+                  "OuterEnergy": 65292,
+                  "ExecutableDir": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/execute/TEST/nvidia/build",
+                  "Kernels": {
+                        "__omp_offloading_3e4ff275598a3681_l16.json": {
+                              "Name": "__omp_offloading_821_710ac79__Z6vecAddPdS_m_l16",
+                              "HashName": "__omp_offloading_3e4ff275598a3681_l16",
+                              "NumRegs": 40,
+                              "SMem": 1584.0,
+                              "NumTeams": 1024,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/TEST/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": true
+                        }
+                  }
+            },
+            "original": {
+                  "name": "original",
+                  "BuildTime": 2.0521204471588135,
+                  "OuterTime": 1.7127184867858887,
+                  "InnerTime": "1.3047",
+                  "BuildEnergy": 19773,
+                  "OuterEnergy": 66059,
+                  "ExecutableDir": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/execute/TEST/nvidia/build",
+                  "Kernels": {
+                        "__omp_offloading_821_710ac79__Z6vecAddPdS_m_l16.json": {
+                              "Name": "__omp_offloading_821_710ac79__Z6vecAddPdS_m_l16",
+                              "HashName": "__omp_offloading_821_710ac79__Z6vecAddPdS_m_l16",
+                              "NumRegs": 40,
+                              "SMem": 1584.0,
+                              "NumTeams": 1024,
+                              "NumThreads": 128,
+                              "ExecTime": 0.0,
+                              "DB": "/data2/nmn/rr-metrics/openmp-rr/record-replay/RR/results/TEST/nvidia",
+                              "Profiler": {
+                                    "Name": "nvidia",
+                                    "Capability": 7.5
+                              },
+                              "recorded": false
+                        }
+                  }
+            }
+      }
+}

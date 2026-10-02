@@ -1,0 +1,537 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/openmp/libomptarget/plugins-nextgen/cuda/src/rtl.cpp b/openmp/libomptarget/plugins-nextgen/cuda/src/rtl.cpp
+index d9304381d3b13ebfebfa2e99cf21b6fd9a5821c8..bee8245d0b8e9206bf4c9d9f6996bb485beef4dc 100644
+--- a/openmp/libomptarget/plugins-nextgen/cuda/src/rtl.cpp
++++ b/openmp/libomptarget/plugins-nextgen/cuda/src/rtl.cpp
+@@ -963,51 +963,53 @@ void CUPTIAPI bufferRequested(uint8_t **buffer, size_t *size, size_t *maxNumReco
+   *size = 10 * 1024 * 1024;
+   *maxNumRecords = 0;
+ }
+ 
+ void CUPTIAPI bufferCompleted(CUcontext ctx, uint32_t streamId,
+                               uint8_t *buffer, size_t size, size_t validSize) {
+   if (fp == NULL) {
+         initializeFile();  // Ensure the file is opened
+   }
+   CUptiResult status;
+   CUpti_Activity *record = NULL;
+   do {
+     status = cuptiActivityGetNextRecord(buffer, validSize, &record);
+     if (status == CUPTI_SUCCESS && record != NULL) {
+       if (record->kind == CUPTI_ACTIVITY_KIND_KERNEL) {
+         CUpti_ActivityKernel9 *kernel = (CUpti_ActivityKernel9 *)record;
+         fprintf(fp, "%lu,%lu,%u,%u,%u,%u,%u,%u,%u,%d,%d,NA,NA,NA,NA,%u,%u,%u,%s,%u",
+                 kernel->start, kernel->end - kernel->start, kernel->gridX, kernel->gridY,
+                 kernel->gridZ, kernel->blockX, kernel->blockY, kernel->blockZ,
+                 kernel->registersPerThread, kernel->staticSharedMemory,
+                 kernel->dynamicSharedMemory, /*Size*//*Throughput*//*SrcMemType*/
+                 /*DstMemType*/ kernel->deviceId, kernel->contextId,
+                 kernel->streamId, kernel->name, kernel->correlationId);
+       }
+     }
+-    else{
++    // CUPTI uses MAX_LIMIT_REACHED to signal that the buffer contains no more
++    // activity records. This is the normal loop terminator, not an error.
++    else if (status != CUPTI_ERROR_MAX_LIMIT_REACHED) {
+       const char *errstr;
+       cuptiGetResultString(status, &errstr);
+       fprintf(stderr, "Error getting next record: %s\n", errstr);
+     }
+   } while (status == CUPTI_SUCCESS);
+   free(buffer);
+ }
+ 
+ 
+ 
+ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
+                                uint32_t NumThreads, uint64_t NumBlocks,
+                                uint32_t DynamicMemorySize,
+                                int32_t NumKernelArgs, void *KernelArgs,
+                                AsyncInfoWrapperTy &AsyncInfoWrapper) const {
+   CUDADeviceTy &CUDADevice = static_cast<CUDADeviceTy &>(GenericDevice);
+ 
+   CUstream Stream = CUDADevice.getStream(AsyncInfoWrapper);
+   if (!Stream)
+     return Plugin::error("Failure to get stream");
+ 
+   //CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMCPY));
+   //CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_MEMSET));
+ 
+   CUPTI_CHECK(cuptiActivityEnable(CUPTI_ACTIVITY_KIND_KERNEL));
+diff --git a/record-replay/RR/README.md b/record-replay/RR/README.md
+index 528f98fa5f2230f401113679741a0acf7dbbdbe9..040dc737a88a982d4ca35432641904b4b1096c0a 100644
+--- a/record-replay/RR/README.md
++++ b/record-replay/RR/README.md
+@@ -105,67 +105,69 @@ In the case of a nvidia system please install also 'python -m pip install pycuda
+ 
+     Both kernel names and RR-Kernel Handlers are unique per system.
+ 
+ 3. To optimize a single kernel of an application invoke the script as follows:
+ 
+     ```bash
+     python optimize.py -b benchmarks/vAdd/Test.py -d nvidia --scenario $SCENARIO --kernel <RR-Kernel-Handler>
+     ```
+ 
+     The parameter `--kernel <RR-Kernel-Handler>` instructs the optimizer to only optimize the specific kernel. In our case we set RR-Kernel-Handler to `__omp_offloading_4cd36591e19c694a_l16`.
+ 
+     The parameter `scenario` accepts any of the next four choices:
+ 
+     * `EM`: In this scenario we only tune the launch bound restricting the maximum number of threads to be used at runtime. We will always launch the kernel with this maximal number, though it is passed as runtime parameter and cannot be folded into the application code. We explore only values that are multiple to the warp / wave size of the respective architecture, i.a., 32 for NVIDIA and 64 for the AMD GPU. Since 1024 is the hardware defined upper bound, the search space is tractable
+ 
+     * `EMM`: In this scenario we tune both launch bounds parameters. As before, kernels are launched with the maximum number of threads defined in the launch bounds and those values are again multiples of the warp / wave size.
+ 
+     * `BONN`: In this scenario we employ BO to tune only parameters that can be adjusted at runtime without requiring re-compilation (via JIT) of the kernel.
+ 
+     * `BOMN`: In this scenario we explore both the launch parameters and the execution time parameters. As the search space is even larger than `BONN`, we again employ BO to identify configurations that maximize kernel speedup.
+ 
+     In the cases of BO optimization the user can select also the number of iterations to run the optimizer for. To do so, the user can optionally pass the option `--init-samples 3` and `--opt-samples 10` to perform 3 random samples and 10 BO optimization samples. By default the scripts uses 30 and 200 samples respectively.
+ 
+     Finally, in the case of running the optimizer on a network file system such as NFS, Lustre, VAST, GPFS, during replay the recorded images are loaded from network. Thus the process is slower. We provide the additional option `--tmp-dir` that can define a scratch directory to save temporal files either in memory or in a local hard drive, such as an SSD. We typically set this value to `/dev/shm/`.
+ 
++    NVIDIA CUPTI returns `CUPTI_ERROR_MAX_LIMIT_REACHED` when an activity buffer has been fully consumed; this is a normal end-of-buffer condition. The runtime suppresses that diagnostic, and the optimizer removes each temporary `kernel_activities.csv` after parsing it (including after failed replay attempts) to prevent profiler output from consuming the available disk space.
++
+ 4. Querying the obtained kernel speedup can be done through the following command:
+ 
+     ```bash
+     python optimize.py -b benchmarks/vAdd/Test.py -d nvidia --scenario $SCENARIO --stats | column -t -s :
+     ```
+ 
+-    The variable `$SCENARIO` must be set. The column `line` indicates the source code line this kernel was defined. The columns Speedup indicates the speedup of this kernel and the columns `NumTeams, NumThreads, MinTeams, MaxThreads` indicate the discovered optimal parameters (`0|-1` reflect the default OpenMP value)
++    The variable `$SCENARIO` must be set. The `Speedup` column indicates the speedup of this kernel, and `EnergyImprovement` is the baseline energy divided by the optimal configuration's energy. `LoadRatio` and `StoreRatio` are the baseline global-memory operation counts divided by the counts for the optimal configuration, so values greater than one indicate an improvement or reduction. The columns `NumTeams, NumThreads, MinTeams, MaxThreads` indicate the discovered optimal parameters (`0|-1` reflect the default OpenMP value).
+ 
+     In our system the following command:
+     ```bash
+     python optimize.py -b benchmarks/vAdd/Test.py -d nvidia --scenario EM --stats | column -t -s :
+     ```
+ 
+     Outputs the following information:
+     ```bash
+-    Name                                             Speedup             NumTeams  NumThreads  MinTeams  MaxThreads
+-    __omp_offloading_4d_84a6373d__Z6vecAddPdS_m_l16  1.0224369071371067  -1        928         -1        928
++    Name                                             Speedup             EnergyImprovement  LoadRatio  StoreRatio  NumTeams  NumThreads  MinTeams  MaxThreads
++    __omp_offloading_4d_84a6373d__Z6vecAddPdS_m_l16  1.0224369071371067  1.01               1.0        1.0         -1        928         -1        928
+     ```
+ 
+ 5. The last step of the optimization process requires as to embed the optimal configuration back to the original application binary. To do so please issue the following command:
+ 
+     ```bash
+     python optimize.py -b benchmarks/vAdd/Test.py -d nvidia --scenario EM --run-optimal
+     ```
+ 
+     The command `--run-optimal` compiles and runs the optimal configuration once.
+ 
+ 6. To check the obtained speedups and results of all optimized benchmark configuration please issue the command:
+ 
+     ```bash
+     python optimize.py -b benchmarks/vAdd/Test.py -d nvidia --summary
+     ```
+ 
+     The command output should look like:
+ 
+     ```bash
+     ***************************************************************************
+     Time in seconds (Kernels (line number)) show the time of a single invocation
+               original        EM
+     EndToEnd  0.261622  0.297601
+     l16       0.000016  0.000016
+     ***************************************************************************
+diff --git a/record-replay/RR/RRUtil/Benchmark.py b/record-replay/RR/RRUtil/Benchmark.py
+index a2d2a8426c8232b76304fb1162882c916c17698c..8594e57849766c0d466d2951838e532fef955129 100644
+--- a/record-replay/RR/RRUtil/Benchmark.py
++++ b/record-replay/RR/RRUtil/Benchmark.py
+@@ -96,58 +96,58 @@ class Kernel:
+             return False
+ 
+         return len(db) == totalExperiments + 1
+ 
+     def Pending(self, **kwargs):
+         db = DB(self.getDBName(**kwargs), self.getDefaultKey())
+         totalExperiments = db.getTotalSize()
+         if totalExperiments == -1:
+             return 2**31
+ 
+         if (len(db) > totalExperiments ):
+             return 0
+         return totalExperiments + 1 - len(db)
+ 
+     def getDefaultTime(self, **kwargs):
+         db = DB(self.getDBName(**kwargs), self.getDefaultKey())
+         return db.getBaseline()
+ 
+     def getDefaultEnergy(self, **kwargs):
+         db = DB(self.getDBName(**kwargs), self.getDefaultKey())
+         return db.getBaselineEnergy()
+ 
+     def Stats(self, **kwargs):
+         configKey = self.getConfigKey(kwargs)
+         db = DB(self.getDBName(**kwargs), self.getDefaultKey())
+-        results = {}
+-        Configs, X, Y = db.GetSpeedUps()
++        _, X, Y = db.GetSpeedUps()
+         if len(Y) > 0:
+-            index_min = min(range(len(Y)), key=Y.__getitem__)
+             index_max = max(range(len(Y)), key=Y.__getitem__)
+             bestConfig = X[index_max]
+-            return configKey, Y[index_max], bestConfig
+-        return configKey, -1, {}
++            bestKey = self.getConfigKey(bestConfig)
++            return (configKey, Y[index_max], db.EnergyImprov(bestKey),
++                    db.LoadRatio(bestKey), db.StoreRatio(bestKey), bestConfig)
++        return configKey, -1, -1, -1, -1, {}
+ 
+     def BuildBest(self, **kwargs):
+         configKey = self.getConfigKey(kwargs)
+         db = DB(self.getDBName(**kwargs), self.getDefaultKey())
+ 
+         Configs, X, Y =  db.GetSpeedUps()
+         index_max = max(range(len(Y)), key=Y.__getitem__)
+         bestConfig = X[index_max]
+         best  = ' '.join([f'{k}={v}' for k,v in X[index_max].items()])
+ 
+         regs = bestConfig['NumRegsPerThread']
+         pressure = bestConfig['RegEffort']
+         NumThreads = bestConfig['NumThreads']
+         NumTeams = bestConfig['NumTeams']
+         self.prof.deviceCompile(self.original, self.Name, self.HashName, regs, pressure)
+         print('Best :{} {}={} {}={} (s)'.format( best, 'speedup', Y[index_max], 'Duration', db.Duration(Configs[index_max])))
+         # TODO: Replayer.command() runs nvprof, need to change that. 
+         cmd = self.Replayer.command(NumThreads, NumTeams).format(kernel_name=f'{self.HashName}')
+         env = self.Replayer.env()
+         #TODO: replace with cupti
+         #Profiler.command() runs nvprof
+         #cmd = self.Profiler.command().format(executable=cmd, output=f'{self.HashName}.csv')
+         cmd = self.Profiler.command().format(executable=cmd)
+         #env += ' ' + self.Profiler.env()
+         print('Cmd:', env + ' ' + cmd)
+@@ -229,53 +229,54 @@ class Kernel:
+             bestEnergyConfig = None
+             bestImprov = None
+             worstEnergyConfig = None
+             worstImprov = None
+             
+             leastLoads = None
+             leastLoadConfig = None
+             leastStores = None
+             leastStoreConfig = None
+             mostLoads = None
+             mostLoadConfig = None
+             mostStores = None
+             mostStoreConfig = None
+ 
+             for e in experiments:
+                 #print(e)
+                 key = self.getConfigKey(e)
+ 
+                 Valid, SStats, DStats, Duration, Energy, GLoads, GStores = (0, -1, -1, 1, 1, 1, 1)
+                 if not (key in db):
+                     Valid, SStats, DStats, Duration, Energy, GLoads, GStores = self.sample(Tries=5, **e)
+                 db.Add(key, [SStats], DStats, [Duration], [Energy], [GLoads], [GStores], Valid)
+ 
+                 speedup = db.Speedup(key)
+                 energy_improv = db.EnergyImprov(key)
+-                load_ratio = db.GLoads(key)
+-                store_ratio = db.GStores(key)
+-                print(f'{key} -> Speedup: {speedup}, Energy_Improv: {energy_improv}')
++                load_ratio = db.LoadRatio(key)
++                store_ratio = db.StoreRatio(key)
++                print(f'{key} -> Speedup: {speedup}, Energy_Improv: {energy_improv}, '
++                      f'Load_Ratio: {load_ratio}, Store_Ratio: {store_ratio}')
+                 if bestSpeedup is None or bestSpeedup < speedup:
+                     bestSpeedup = speedup
+                     bestConfig = e
+                 if worstSpeedup is None or worstSpeedup > speedup:
+                     worstSpeedup = speedup
+                     worstConfig = e
+ 
+                 if bestImprov is None or bestImprov < energy_improv:
+                     bestImprov = energy_improv
+                     bestEnergyConfig = e
+                 if worstImprov is None or worstImprov > energy_improv:
+                     worstImprov = energy_improv
+                     worstEnergyConfig = e
+ 
+                 meanGLoads = np.array(GLoads).mean() if isinstance(GLoads, list) else GLoads
+                 meanGStores = np.array(GStores).mean() if isinstance(GStores, list) else GStores
+ 
+                 if leastLoads is None or leastLoads > meanGLoads:
+                     leastLoads = meanGLoads
+                     leastLoadConfig = e
+                 if leastStores is None or leastStores > meanGStores:
+                     leastStores = meanGStores
+                     leastStoreConfig = e
+ 
+                 if mostLoads is None or mostLoads < meanGLoads:
+@@ -411,54 +412,58 @@ class Kernel:
+ 
+             for performed in range (0, pending):
+                 if performed < (initSamples +1):
+                     NextPoint = optimizer.space.array_to_params(optimizer.space.random_sample())
+                 else:
+                     NextPoint = optimizer.suggest(utility)
+                 config = self.convertPointToValues(NextPoint)
+                 config['DeviceID'] = deviceID
+                 print("================= Next Point ====================")
+                 print(NextPoint)
+                 #print(config)
+                 print(f'Performing {performed} experiment out of {pending}')
+                 print("=================================================")
+ 
+                 key = self.getConfigKey(config)
+                 Valid, SStats, DStats, Duration, Energy, GLoads, GStores = (0, -1, -1, 1, 1, -1, -1)
+                 if not (key in db):
+                     Valid, SStats, DStats, Duration, Energy, GLoads, GStores = self.sample(Tries=5, **config)
+                 db.Add(key, [SStats], DStats, [Duration], [Energy],[GLoads], [GStores], Valid)
+                 Speedup = db.Speedup(key)
+                 EnergyGain = db.EnergyImprov(key)
+                 LoadRatio = db.LoadRatio(key)
+                 StoreRatio = db.StoreRatio(key)
+                 
+                 if(Speedup >= 1.05 or EnergyGain >= 1): 
+-                    row_data = {**config, 'Speedup':Speedup, 'Energy_Improvment': EnergyGain}
++                    row_data = {**config, 'Speedup': Speedup,
++                                'Energy_Improvment': EnergyGain,
++                                'Load_Ratio': LoadRatio,
++                                'Store_Ratio': StoreRatio}
+                     stats.append(row_data)
+ 
+-                print('{0} -> Speedup: {1} , EnergyImprov: {2}'.format(key, Speedup, EnergyGain))
++                print(f'{key} -> Speedup: {Speedup}, EnergyImprov: {EnergyGain}, '
++                      f'Load_Ratio: {LoadRatio}, Store_Ratio: {StoreRatio}')
+                 try:
+                     # Update the optimizer with the evaluation results.
+                     # Energy - Delay product - EnergyGain * Speedup
+                     #optimizer.register(params = NextPoint, target = EnergyGain * Speedup)
+                     targets = {
+                         'speedup': Speedup,
+                         'energy': EnergyGain,
+                         'loads': LoadRatio,
+                         'stores': StoreRatio,
+                         'memory': LoadRatio * StoreRatio,
+                     }
+                     optimizer.register(params = NextPoint, target = targets[objective])
+                     #optimizer.register(params = NextPoint, target = Speedup)
+                 except:
+                     assert False, 'optimizer error'
+ 
+             print('Kernel: {} Best result: {}; f_{}(x) = {}.'.format(self.Name, optimizer.max['params'], objective, optimizer.max['target']))
+             df = pd.DataFrame(stats)
+             df.to_csv(stats_file, index=False)
+ 
+         optimize(self, **kwargs)
+ 
+     # returns isValid, SStats, DStats, execTime, execEnergy, gLoads, gStores
+     def sample(self, **kwargs):
+         Tries = kwargs.pop('Tries', 5)
+@@ -487,67 +492,75 @@ class Kernel:
+             #end energy here
+             end_energy = nvmlEnergy(device_handle)
+             return False, None, None, None, None, None, None
+ 
+         DStats += res
+         #stats = np.array(DStats)[:,-3]
+         end = time.time()
+         #end energy here
+         end_energy = nvmlEnergy(device_handle)
+ 
+         return True, SStats, DStats, end-start, end_energy-start_energy, GLoads, GStores
+ 
+     def execute(self, NumThreads=None, NumTeams=None, maxIters = 9,
+                 keepMaxTeam=True, dropSingleTeams=False):
+         #TODO: replace reference to nvprof in command()
+         cmd = self.Replayer.command(NumThreads, NumTeams).format(kernel_name=f'{self.HashName}')
+         env = self.Replayer.env()
+         
+         #cmd = self.Profiler.command().format(executable=cmd, output=f'{self.HashName}.csv')
+         #env += ' ' + self.Profiler.env()
+         results = []
+         global_loads = []
+         global_stores = []
+         #print("MaxIters ", maxIters)
+         for i in range (0, maxIters):
+-            Path('kernel_activities.csv').unlink(missing_ok=True)
++            activities_file = Path('kernel_activities.csv')
++            activities_file.unlink(missing_ok=True)
+             ret, stdout, stderr = execute_command(env + ' timeout 180s ' + cmd,
+                     capture_output=True, cwd=os.getcwd(),
+                     shell=True, ContinueOnFailure=True)
+             #print("Return value ", ret)
+             #print("\n\nStdOut\n", stdout)
+             #print("\n\nStdErr\n", stderr)
+             if ret != 0:
+-                return list()
++                # An interrupted profiler run can leave a very large partial
++                # activity file behind. It is unusable and may exhaust the
++                # filesystem across repeated optimization attempts.
++                activities_file.unlink(missing_ok=True)
++                return [], [], []
+             #print(os.getcwd())
+             
+             #print("Reading from ", self.HashName)
+              
+             #kernelDescr = self.Profiler.parse(f'{self.HashName}.csv',
+-            kernelDescr = self.Profiler.parse('kernel_activities.csv',
+-                                              keepMaxTeam,
+-                                              dropSingleTeams)[self.Name]
++            try:
++                kernelDescr = self.Profiler.parse(str(activities_file),
++                                                  keepMaxTeam,
++                                                  dropSingleTeams)[self.Name]
++            finally:
++                activities_file.unlink(missing_ok=True)
+             global_loads.append(kernelDescr.pop('GLoads', None))
+             global_stores.append(kernelDescr.pop('GStores', None))
+             results.append(list(kernelDescr.values()))
+             
+             #print(results)
+ 
+             # The legacy CUDA plugin reports nvmetrics on stdout instead of the
+             # CUPTI activity CSV used by the nextgen plugin. Use stdout as a
+             # fallback so both plugins populate the same database fields.
+             if global_loads[-1] is None or global_stores[-1] is None:
+                 load_match = re.search(r'\|\|NVMetrics\|\| global_load_requests: ([-+0-9.eE]+)', stdout)
+                 store_match = re.search(r'\|\|NVMetrics\|\| global_store_requests: ([-+0-9.eE]+)', stdout)
+                 global_loads[-1] = float(load_match.group(1)) if load_match else 0.0
+                 global_stores[-1] = float(store_match.group(1)) if store_match else 0.0
+ 
+         return results, global_loads, global_stores
+ 
+     def setOrigDescr(self, Regs, SMem, NumTeams, NumThreads, ExecTime):
+         self.NumRegs = Regs
+         self.SMem = SMem
+         self.NumTeams = NumTeams
+         self.NumThreads = NumThreads
+         self.ExecTime = ExecTime
+         self.profiled = True
+ 
+@@ -901,26 +914,25 @@ class MakeBenchmark(BaseBenchmark):
+           self.executableDir = self.buildDir = createDir(self.BUILDDIR)
+         else:
+           self.executableDir = self.buildDir = createDir(self.BUILDDIR + '_best_' + optimal)
+         makeCmd = 'BUILDDIR={0} make '.format(self.buildDir)
+         if flags is not None:
+             makeCmd+=' '.join(['{0}="{1}"'.format(k,v) for k,v in flags.items() ])
+         return execute_command(makeCmd, capture_output=True, cwd=self.root, shell=True)
+ 
+     def clean(self, flags=None):
+         self.executableDir = self.buildDir = createDir(self.BUILDDIR)
+         makeCmd = 'BUILDDIR={0} make clean '.format(self.buildDir)
+         if flags is not None:
+             makeCmd+=' '.join(['{0}="{1}"'.format(k,v) for k,v in flags.items() ])
+         return execute_command(makeCmd, capture_output=True, cwd=self.root, shell=True)
+ 
+     @abstractmethod
+     def env(self):
+         return ''
+ 
+     @abstractmethod
+     def command(self):
+         return ''
+ 
+ #There should be a better way to do this.
+ validBenchmarks=[BaseBenchmark.__name__, MakeBenchmark.__name__]
+-
+diff --git a/record-replay/RR/optimize.py b/record-replay/RR/optimize.py
+index cc56577152fd2bf9cfec28d3e94d774975805ed7..514f3baeae50c0e60eb788023f0c9afc9ca0348b 100644
+--- a/record-replay/RR/optimize.py
++++ b/record-replay/RR/optimize.py
+@@ -203,64 +203,65 @@ def main():
+                 print('*'*numChars)
+                 print()
+                 title = ' Speedup '
+                 print()
+                 columns = df.columns.tolist()
+                 print(columns)
+                 columns.remove('original')
+                 for c in columns:
+                     df[c] = df['original'].astype(float) / df[c].astype(float)
+                 df['original'] = df['original'].astype(float) / df['original'].astype(float)
+                 df_str = df.to_string()
+                 numChars = len(df_str.split('\n')[0])
+                 if len(title) < numChars:
+                     rem = int((numChars - len(title)) / 2)
+                     title = ''.join(['*']* rem) + title + ''.join(['*']* rem)
+ 
+                 if len(title) > numChars:
+                     numChars = len(title)
+                 print('*'*numChars)
+                 print(title)
+                 print(df_str)
+                 print('*'*numChars)
+                 print()
+                 print()
+             elif stats:
+-                print('Name:Speedup:NumTeams:NumThreads:MinTeams:MaxThreads')
++                print('Name:Speedup:EnergyImprovement:LoadRatio:StoreRatio:NumTeams:NumThreads:MinTeams:MaxThreads')
+                 for k, v in bench.getKernels('record').items():
+-                    c, speedup, options = v.Stats(**optParams)
+-                    opts=':'.join( f'{k}={v}' for k,v in options.items() )
+-                    print("{0}:{1}:{2}:{3}:{4}:{5}".format(v.Name, speedup,
++                    (_, speedup, energy_improvement, load_ratio, store_ratio,
++                     options) = v.Stats(**optParams)
++                    print("{0}:{1}:{2}:{3}:{4}:{5}:{6}:{7}:{8}".format(
++                      v.Name, speedup, energy_improvement, load_ratio, store_ratio,
+                       options.get('NumTeams', -1),
+                       options.get('NumThreads', -1),
+                       options.get('MinTeams', -1),
+                       options.get('MaxThreads', -1)))
+             elif make_best:
+                 best_configs = list()
+ 
+                 for k, v in bench.getKernels('record').items():
+-                    c, speedup, options = v.Stats(**optParams)
++                    _, _, _, _, _, options = v.Stats(**optParams)
+                     options = device.transformConfig(options)
+                     best_configs.append( { 'kernel' : v.Name, **options } )
+ 
+                 fn = Path(bench.root) / Path(device.Name + args.scenario + '.json')
+ 
+                 with open(str(fn), 'w') as fd:
+                     json.dump(best_configs, fd, indent=6)
+ 
+                 build_start = time.time()
+                 bench.build(fn=fn, useCase=args.scenario)
+                 build_end = time.time()
+ 
+                 device_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                 opt_rstart = time.time()
+                 opt_rstart_energy = nvmlEnergy(device_handle)
+                 app_time, kernels = bench.execute(Record=False)
+                 opt_rend = time.time()
+                 opt_rend_energy = nvmlEnergy(device_handle)
+                 print("Record Energy = ", rr_end_energy - rr_start_energy)
+ 
+                 bench.register_variant(args.scenario, build_end - build_start, 
+                                        opt_rend - opt_rstart, app_time,
+                                        build_end_energy - build_start_energy, 
+                                        opt_rend_energy - opt_rstart_energy, kernels)
+ 
+@@ -274,26 +275,25 @@ def main():
+                 if kernel.lower() == 'all':
+                     AnalysisKernels = bench.getKernels('record').keys()
+                 else:
+                     AnalysisKernels.append(kernel)
+ 
+                 for k in AnalysisKernels:
+                     kernel = bench.getKernels('record')[k]
+                     if algorithm == 'bo':
+                       kernel.BO(**optParams, Policy='bo', device=0)
+                     elif algorithm == 'exhaustive':
+                       kernel.optimize_exhaustive(**optParams, Policy ='exhaustive', device=0)
+                     else:
+                       assert False, 'opt must be bo or exhaustive'
+                 #num_gpus = 8
+                 #with ProcessPoolExecutor(max_workers=num_gpus) as executor:
+                 #    futures = [executor.submit(executeOnGPU, k, algorithm, optParams, i % num_gpus, bench) for i, k in enumerate(AnalysisKernels)]
+                     #print(futures.result())
+                     # Wait for all futures to complete (optional)
+                 #    for future in futures:
+                  #       future.result()
+         else:
+             print('You need to record application first')
+ 
+ if __name__ == "__main__":
+     main()
+-
+ 
+EOF
+)

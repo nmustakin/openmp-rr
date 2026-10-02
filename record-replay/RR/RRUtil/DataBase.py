@@ -67,7 +67,27 @@ class DB:
         return self.MetaData['totalExperiments']
 
     def setMetadata(self, mData):
+        measurement_schema = self.MetaData.get('measurementSchema')
         self.MetaData = mData
+        if measurement_schema is not None:
+            self.MetaData['measurementSchema'] = measurement_schema
+        self.Update()
+
+    def setMeasurementSchema(self, schema):
+        """Discard samples produced by an incompatible measurement method."""
+        previous_schema = self.MetaData.get('measurementSchema')
+        if self.Data and previous_schema != schema:
+            warnings.warn(
+                f'Optimization database {self.fn} uses measurement schema '
+                f'{previous_schema!r}; discarding its samples before using '
+                f'{schema!r}.', RuntimeWarning)
+            self.Data = {}
+            self.DefaultExecTime = None
+            self.DefaultExecEnergy = None
+            self.DefaultLoads = None
+            self.DefaultStores = None
+
+        self.MetaData['measurementSchema'] = schema
         self.Update()
 
     def __len__(self):

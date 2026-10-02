@@ -1,0 +1,188 @@
+ (cd "$(git rev-parse --show-toplevel)" && git apply --3way <<'EOF' 
+diff --git a/openmp/libomptarget/plugins/cuda/src/rtl.cpp b/openmp/libomptarget/plugins/cuda/src/rtl.cpp
+index ceb5ddff65c028582963bfdac44669be3d49aa96..5566087153fd96d2b22fd4849149c253091d00b8 100644
+--- a/openmp/libomptarget/plugins/cuda/src/rtl.cpp
++++ b/openmp/libomptarget/plugins/cuda/src/rtl.cpp
+@@ -74,50 +74,58 @@ using namespace llvm;
+ #define BOOL2TEXT(b) ((b) ? "Yes" : "No")
+ 
+ #include "elf_common.h"
+ 
+ /// Keep entries table per device.
+ struct FuncOrGblEntryTy {
+   __tgt_target_table Table;
+   std::vector<__tgt_offload_entry> Entries;
+ };
+ 
+ /// Use a single entity to encode a kernel and a set of flags.
+ struct KernelTy {
+   CUfunction Func;
+ 
+   // execution mode of kernel
+   llvm::omp::OMPTgtExecModeFlags ExecutionMode;
+ 
+   /// Maximal number of threads per block for this kernel.
+   int MaxThreadsPerBlock = 0;
+ 
+   KernelTy(CUfunction Func, llvm::omp::OMPTgtExecModeFlags ExecutionMode)
+       : Func(Func), ExecutionMode(ExecutionMode) {}
+ };
+ 
+ namespace {
++/// Return whether expensive per-launch NVIDIA hardware metrics were requested.
++/// Recording full applications must leave this disabled because nvmetrics
++/// serializes and replays every kernel once per requested metric.
++bool profileMetricsEnabled() {
++  const char *MetricsEnv = getenv("LIBOMPTARGET_RR_PROFILE_METRICS");
++  return MetricsEnv && std::string(MetricsEnv) != "0";
++}
++
+ bool checkResult(CUresult Err, const char *ErrMsg) {
+   if (Err == CUDA_SUCCESS)
+     return true;
+ 
+   REPORT("%s", ErrMsg);
+   CUDA_ERR_STRING(Err);
+   return false;
+ }
+ 
+ int memcpyDtoD(const void *SrcPtr, void *DstPtr, int64_t Size,
+                CUstream Stream) {
+   CUresult Err =
+       cuMemcpyDtoDAsync((CUdeviceptr)DstPtr, (CUdeviceptr)SrcPtr, Size, Stream);
+ 
+   if (Err != CUDA_SUCCESS) {
+     DP("Error when copying data from device to device. Pointers: src "
+        "= " DPxMOD ", dst = " DPxMOD ", size = %" PRId64 "\n",
+        DPxPTR(SrcPtr), DPxPTR(DstPtr), Size);
+     CUDA_ERR_STRING(Err);
+     return OFFLOAD_FAIL;
+   }
+ 
+   return OFFLOAD_SUCCESS;
+ }
+ 
+@@ -1216,94 +1224,88 @@ public:
+       } else {
+         DP("Using default number of teams %d\n", DeviceData[DeviceId].NumTeams);
+         CudaBlocksPerGrid = DeviceData[DeviceId].NumTeams;
+       }
+     } else {
+       DP("Using requested number of teams %d\n", TeamNum);
+       CudaBlocksPerGrid = TeamNum;
+     }
+ 
+     if (CudaBlocksPerGrid > DeviceData[DeviceId].BlocksPerGrid) {
+       DP("Capping number of teams to team limit %d\n",
+          DeviceData[DeviceId].BlocksPerGrid);
+       CudaBlocksPerGrid = DeviceData[DeviceId].BlocksPerGrid;
+     }
+ 
+     INFO(OMP_INFOTYPE_PLUGIN_KERNEL, DeviceId,
+          "Launching kernel %s with %d blocks and %d threads in %s mode\n",
+          (getOffloadEntry(DeviceId, TgtEntryPtr))
+              ? getOffloadEntry(DeviceId, TgtEntryPtr)->name
+              : "(null)",
+          CudaBlocksPerGrid, CudaThreadsPerBlock,
+          (!IsSPMDMode ? (IsGenericMode ? "Generic" : "SPMD-Generic") : "SPMD"));
+ 
+     CUstream Stream = getStream(DeviceId, AsyncInfo);
+     
+-    // Setup metrics
+-    std::vector<std::string> MetricNames = {
+-      "achieved_occupancy",
+-      "branch_efficiency",
+-      "dram_read_transactions",
+-      "dram_write_transactions",
+-      "global_load_requests",
+-      "global_store_requests",
+-      "local_load_requests",
+-      "local_store_requests"
+-    };
+-
+-    std::vector<std::string> MetricIDs = {
+-      "sm__warps_active.avg.pct_of_peak_sustained_active",
+-      "smsp__sass_average_branch_targets_threads_uniform.pct",
+-      "dram__sectors_read.sum",
+-      "dram__sectors_write.sum",
+-      "l1tex__t_requests_pipe_lsu_mem_global_op_ld.sum",
+-      "l1tex__t_requests_pipe_lsu_mem_global_op_st.sum",
+-      "l1tex__t_requests_pipe_lsu_mem_local_op_ld.sum",
+-      "l1tex__t_requests_pipe_lsu_mem_local_op_st.sum"
+-    };
+-    // Start measurement
+-    nvmetrics::measureMetricsStart(MetricIDs);
++    const bool ProfileMetrics = profileMetricsEnabled();
++    std::vector<std::string> MetricNames;
++    std::vector<std::string> MetricIDs;
++    if (ProfileMetrics) {
++      MetricNames = {"achieved_occupancy", "branch_efficiency",
++                     "dram_read_transactions", "dram_write_transactions",
++                     "global_load_requests", "global_store_requests",
++                     "local_load_requests", "local_store_requests"};
++      MetricIDs = {
++          "sm__warps_active.avg.pct_of_peak_sustained_active",
++          "smsp__sass_average_branch_targets_threads_uniform.pct",
++          "dram__sectors_read.sum",
++          "dram__sectors_write.sum",
++          "l1tex__t_requests_pipe_lsu_mem_global_op_ld.sum",
++          "l1tex__t_requests_pipe_lsu_mem_global_op_st.sum",
++          "l1tex__t_requests_pipe_lsu_mem_local_op_ld.sum",
++          "l1tex__t_requests_pipe_lsu_mem_local_op_st.sum"};
++      nvmetrics::measureMetricsStart(MetricIDs);
++    }
+     
+     Err = cuLaunchKernel(KernelInfo->Func, CudaBlocksPerGrid, /* gridDimY */ 1,
+                          /* gridDimZ */ 1, CudaThreadsPerBlock,
+                          /* blockDimY */ 1, /* blockDimZ */ 1,
+                          DynamicMemorySize, Stream, &Args[0], nullptr);
+ 
+     if (!checkResult(Err, "Error returned from cuLaunchKernel\n"))
+       return OFFLOAD_FAIL;
+ 
+-    // Stop measurement
+-    std::vector<double> MetricResults = nvmetrics::measureMetricsStop();
+-    assert(MetricIDs.size() == MetricResults.size());
+-
+     DP("Launch of entry point at " DPxMOD " successful!\n",
+        DPxPTR(TgtEntryPtr));
+ 
+-    // Print result of the measurement
+-    for (int i = 0; i < MetricResults.size(); i++) {
+-      printf("||NVMetrics|| %s: %lf \n", MetricNames[i].c_str(), MetricResults[i]);
+-    } 
++    if (ProfileMetrics) {
++      std::vector<double> MetricResults = nvmetrics::measureMetricsStop();
++      assert(MetricIDs.size() == MetricResults.size());
++      for (size_t I = 0; I < MetricResults.size(); ++I)
++        printf("||NVMetrics|| %s: %lf \n", MetricNames[I].c_str(),
++               MetricResults[I]);
++    }
+ 
+     return OFFLOAD_SUCCESS;
+   }
+ 
+   int synchronize(const int DeviceId, __tgt_async_info *AsyncInfo) const {
+     CUstream Stream = reinterpret_cast<CUstream>(AsyncInfo->Queue);
+     CUresult Err = cuStreamSynchronize(Stream);
+ 
+     // Once the stream is synchronized, return it to stream pool and reset
+     // AsyncInfo. This is to make sure the synchronization only works for its
+     // own tasks.
+     StreamPool[DeviceId]->release(reinterpret_cast<CUstream>(AsyncInfo->Queue));
+     AsyncInfo->Queue = nullptr;
+ 
+     if (Err != CUDA_SUCCESS) {
+       DP("Error when synchronizing stream. stream = " DPxMOD
+          ", async info ptr = " DPxMOD "\n",
+          DPxPTR(Stream), DPxPTR(AsyncInfo));
+       CUDA_ERR_STRING(Err);
+     }
+     return (Err == CUDA_SUCCESS) ? OFFLOAD_SUCCESS : OFFLOAD_FAIL;
+   }
+ 
+   int queryAsync(const int DeviceId, __tgt_async_info *AsyncInfo) const {
+     CUstream Stream = reinterpret_cast<CUstream>(AsyncInfo->Queue);
+ 
+EOF
+)
