@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from pathlib import Path
 import tempfile
 import time
@@ -77,10 +78,14 @@ class DB:
         """Discard samples produced by an incompatible measurement method."""
         previous_schema = self.MetaData.get('measurementSchema')
         if self.Data and previous_schema != schema:
+            # Keep the old samples on disk; only the in-use database is reset.
+            backup = Path(f'{self.fn}.{previous_schema}.bak')
+            if Path(self.fn).exists() and not backup.exists():
+                shutil.copy2(self.fn, backup)
             warnings.warn(
                 f'Optimization database {self.fn} uses measurement schema '
                 f'{previous_schema!r}; discarding its samples before using '
-                f'{schema!r}.', RuntimeWarning)
+                f'{schema!r} (previous file kept at {backup}).', RuntimeWarning)
             self.Data = {}
             self.DefaultExecTime = None
             self.DefaultExecEnergy = None
@@ -132,10 +137,12 @@ class DB:
             return 1E12
 
         #print("-----------IN DURATION----------\n", self.Data[key]['dynamic'])
+        # Median: replay timings have heavy right tails (see
+        # experiment-archives/optimizer-study-2026-10-09).
         if 'duration' in self.Data[key] and self.Data[key]['duration']:
-            return np.array(self.Data[key]['duration']).mean()
+            return np.median(np.array(self.Data[key]['duration']))
 
-        duration = np.array([ v[-1] for v in self.Data[key]['dynamic']]).mean()
+        duration = np.median(np.array([ v[-1] for v in self.Data[key]['dynamic']]))
         return duration
 
     def Energy(self, key):
@@ -148,8 +155,11 @@ class DB:
 
         #print("------IN ENERGY------", self.Data[key]['energy'])
         #energy = np.array([ v[-1] for v in self.Data[key]['energy']]).mean()
-        energy = np.array(self.Data[key]['energy']).mean()
-        return energy
+        energy = np.array(self.Data[key]['energy'], dtype=float)
+        energy = energy[~np.isnan(energy)]
+        if energy.size == 0:
+            return float('nan')
+        return np.median(energy)
 
     def GLoads(self, key):
         if key not in self.Data:
@@ -324,6 +334,19 @@ class DB:
             else:
                 flat.append(value)
         return [0.0 if value is None else value for value in flat]
+
+    def AddSamples(self, key, duration, energy):
+        """Append extra timing/energy samples to an existing valid entry."""
+        if key not in self.Data or not self.Data[key]['valid']:
+            return
+        self.Data[key]['duration'] += self._flatten_metric(duration)
+        self.Data[key]['energy'] += self._flatten_metric(energy)
+        self.Data[key].setdefault('resampled', 0)
+        self.Data[key]['resampled'] += 1
+        if key == self.Default:
+            self.DefaultExecTime = None
+            self.DefaultExecEnergy = None
+        self.Update()
 
     # Add key in database, if key exists increase counter
     # and ignore parameters

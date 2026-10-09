@@ -25,7 +25,20 @@ from RRUtil.Utilities import execute_command
 from RRUtil.DataBase import DB
 
 class Kernel:
-    MeasurementSchema = 'device-kernel-timing-v2'
+    # v3: in-process time-based warm-up (clock ramp) + repeated event-timed
+    # launches (median), kernel-
+    # level NVML energy over a back-to-back launch window, periodic baseline
+    # re-measurement, and median aggregation. Not comparable with v2 samples.
+    MeasurementSchema = 'device-kernel-timing-v3'
+    # Overridable from the environment for measurement experiments.
+    TimingWarmup = int(os.environ.get('RR_TIMING_WARMUP', 3))
+    # Clocks ramp from idle over ~0.5 s on T4; time the kernel only after.
+    TimingWarmupMs = int(os.environ.get('RR_TIMING_WARMUP_MS', 1000))
+    TimingRepeats = int(os.environ.get('RR_TIMING_REPEATS', 10))
+    EnergyMinMs = int(os.environ.get('RR_ENERGY_MIN_MS', 300))
+    BaselineEvery = int(os.environ.get('RR_BASELINE_EVERY', 20))
+    ExclusiveWaitSeconds = int(os.environ.get('RR_EXCLUSIVE_WAIT_SECONDS', 3600))
+    ContendedRetries = int(os.environ.get('RR_CONTENDED_RETRIES', 5))
 
     class OMPReplayer:
         def __init__(self, MaxMem):
@@ -57,6 +70,11 @@ class Kernel:
             env_vars['LIBOMPTARGET_RR_PROFILE_METRICS'] = int(profile_metrics)
             env_vars['LIBOMPTARGET_RR_PROFILE_ACTIVITIES'] = int(profile_activities)
             env_vars['LIBOMPTARGET_RR_PROFILE_TIMING'] = int(profile_timing)
+            if profile_timing:
+                env_vars['LIBOMPTARGET_RR_TIMING_WARMUP'] = Kernel.TimingWarmup
+                env_vars['LIBOMPTARGET_RR_TIMING_WARMUP_MS'] = Kernel.TimingWarmupMs
+                env_vars['LIBOMPTARGET_RR_TIMING_REPEATS'] = Kernel.TimingRepeats
+                env_vars['LIBOMPTARGET_RR_ENERGY_MIN_MS'] = Kernel.EnergyMinMs
             return ' '.join([f'{k}={v}' for k,v in env_vars.items()])
 
     def __init__(self, Device, name, hashname, dbDir, recorded=True):
@@ -454,6 +472,13 @@ class Kernel:
                 if not (key in db):
                     Valid, SStats, DStats, Duration, Energy, GLoads, GStores = self.sample(Tries=5, **config)
                 db.Add(key, [SStats], DStats, [Duration], [Energy],[GLoads], [GStores], Valid)
+                # Re-measure the baseline periodically so speedups are taken
+                # against a baseline that averages over the run's drift.
+                if (self.BaselineEvery > 0 and
+                        (performed + 1) % self.BaselineEvery == 0):
+                    BValid, _, _, BDuration, BEnergy, _, _ = self.sample()
+                    if BValid:
+                        db.AddSamples(self.getDefaultKey(), BDuration, BEnergy)
                 Speedup = db.Speedup(key)
                 EnergyGain = db.EnergyImprov(key)
                 LoadRatio = db.LoadRatio(key)
@@ -522,6 +547,29 @@ class Kernel:
 
         return True, SStats, DStats, durations, energies, GLoads, GStores
 
+    @staticmethod
+    def _foreign_gpu_processes(device_handle):
+        if device_handle is None:
+            return []
+        try:
+            procs = pynvml.nvmlDeviceGetComputeRunningProcesses(device_handle)
+        except pynvml.NVMLError:
+            return []
+        return [p.pid for p in procs if p.pid != os.getpid()]
+
+    def _wait_for_exclusive_gpu(self, device_handle):
+        waited = 0
+        while self._foreign_gpu_processes(device_handle):
+            if waited % 60 == 0:
+                print(f'GPU busy with processes '
+                      f'{self._foreign_gpu_processes(device_handle)}; waiting')
+            if waited >= self.ExclusiveWaitSeconds:
+                print('Gave up waiting for an exclusive GPU')
+                return False
+            time.sleep(5)
+            waited += 5
+        return True
+
     def execute(self, NumThreads=None, NumTeams=None, maxIters = 9,
                 keepMaxTeam=True, dropSingleTeams=False, device_handle=None):
         #TODO: replace reference to nvprof in command()
@@ -541,17 +589,24 @@ class Kernel:
         global_stores = []
         activities_file = Path('kernel_activities.csv')
         #print("MaxIters ", maxIters)
-        for i in range (0, maxIters):
+        contended_retries = 0
+        while len(durations) < maxIters:
             activities_file.unlink(missing_ok=True)
-            if device_handle is not None:
-                start_energy = nvmlEnergy(device_handle)
+            # Another process on this GPU slows the kernel and pollutes the
+            # device-wide NVML energy counter, so measure only when the GPU
+            # is exclusively ours and discard samples that overlapped one.
+            self._wait_for_exclusive_gpu(device_handle)
             start = time.perf_counter()
             ret, stdout, stderr = execute_command(timing_env + ' timeout 180s ' + cmd,
                     capture_output=True, cwd=os.getcwd(),
                     shell=True, ContinueOnFailure=True)
             end = time.perf_counter()
-            if device_handle is not None:
-                end_energy = nvmlEnergy(device_handle)
+            if self._foreign_gpu_processes(device_handle):
+                contended_retries += 1
+                print('GPU shared during timing replay; discarding sample')
+                if contended_retries <= self.ContendedRetries:
+                    continue
+                print('GPU stayed shared; keeping contended sample')
             if ret != 0:
                 activities_file.unlink(missing_ok=True)
                 return [], [], [], [], []
@@ -562,7 +617,17 @@ class Kernel:
                 print('Replay did not report a device kernel duration')
                 return [], [], [], [], []
             durations.append(float(timing_match.group(1)))
-            energies.append((end_energy - start_energy) if device_handle is not None else 0)
+            # Kernel-level energy from the plugin's back-to-back launch window.
+            # Process-level NVML energy (replay start-up, data loading) is
+            # dominated by overhead unrelated to the launch configuration.
+            energy_match = re.search(
+                r'\|\|ReplayEnergy\|\| joules_per_launch: ([-+0-9.eE]+)', stdout)
+            if energy_match is not None:
+                energies.append(float(energy_match.group(1)))
+            else:
+                if Kernel.EnergyMinMs > 0:
+                    print('Replay did not report kernel energy; recording NaN')
+                energies.append(float('nan'))
 
         # Metrics are deterministic enough for optimization and expensive to
         # collect, so profile them once after all timing/energy samples.

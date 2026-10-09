@@ -10,8 +10,13 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <algorithm>
 #include <cassert>
+#include <chrono>
+#include <cmath>
 #include <cstddef>
+#include <dlfcn.h>
+#include <vector>
 #include <cstdlib>
 #include <cuda.h>
 #include <mutex>
@@ -952,6 +957,57 @@ bool profileTimingEnabled() {
   return TimingEnv && std::string(TimingEnv) != "0";
 }
 
+static long envLong(const char *Name, long Default) {
+  const char *Value = std::getenv(Name);
+  return Value ? std::strtol(Value, nullptr, 10) : Default;
+}
+
+// Kernel-level energy uses NVML, loaded on demand so the plugin does not need
+// to link against it. Returns false when NVML or the energy counter is absent.
+namespace rrnvml {
+typedef int (*InitFn)();
+typedef int (*HandleByPciFn)(const char *, void **);
+typedef int (*EnergyFn)(void *, unsigned long long *);
+typedef int (*ClockFn)(void *, int, unsigned int *);
+static EnergyFn GetEnergy = nullptr;
+static ClockFn GetClock = nullptr;
+static void *Handle = nullptr;
+
+static bool init(CUdevice Device) {
+  static std::once_flag Once;
+  static bool Ok = false;
+  std::call_once(Once, [Device]() {
+    void *Lib = dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL);
+    if (!Lib)
+      return;
+    auto Init = (InitFn)dlsym(Lib, "nvmlInit_v2");
+    auto ByPci = (HandleByPciFn)dlsym(Lib, "nvmlDeviceGetHandleByPciBusId_v2");
+    GetEnergy = (EnergyFn)dlsym(Lib, "nvmlDeviceGetTotalEnergyConsumption");
+    GetClock = (ClockFn)dlsym(Lib, "nvmlDeviceGetClockInfo");
+    char BusId[32];
+    if (!Init || !ByPci || !GetEnergy || Init() != 0 ||
+        cuDeviceGetPCIBusId(BusId, sizeof(BusId), Device) != CUDA_SUCCESS ||
+        ByPci(BusId, &Handle) != 0)
+      return;
+    unsigned long long Probe;
+    Ok = GetEnergy(Handle, &Probe) == 0;
+  });
+  return Ok;
+}
+
+// Current SM clock in MHz (NVML_CLOCK_SM = 1), 0 when unavailable.
+static unsigned smClockMHz() {
+  unsigned Mhz = 0;
+  if (!GetClock || !Handle || GetClock(Handle, 1, &Mhz) != 0)
+    return 0;
+  return Mhz;
+}
+
+static bool energyMilliJoules(unsigned long long &Value) {
+  return GetEnergy && Handle && GetEnergy(Handle, &Value) == 0;
+}
+} // namespace rrnvml
+
 void initializeFile() {
   if (fp == NULL) {
     fp = fopen("kernel_activities.csv", "a+");
@@ -1039,25 +1095,111 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   const bool ProfileMetrics = profileMetricsEnabled();
   const bool ProfileTiming = profileTimingEnabled();
 
-  CUevent TimingStart = nullptr;
-  CUevent TimingStop = nullptr;
+  auto Launch = [&]() {
+    return cuLaunchKernel(Func, NumBlocks, /* gridDimY */ 1,
+                          /* gridDimZ */ 1, NumThreads,
+                          /* blockDimY */ 1, /* blockDimZ */ 1,
+                          DynamicMemorySize, Stream, (void **)KernelArgs,
+                          nullptr);
+  };
+
+  // Timing replays: optional untimed warm-up launches, then REPEATS
+  // individually event-timed launches (median reported in the legacy
+  // ReplayTiming line), then optionally a back-to-back block of launches
+  // lasting at least ENERGY_MIN_MS bracketed by NVML energy reads. Repeated
+  // launches reuse the replayed buffers, so non-idempotent kernels see
+  // updated inputs; never combine with --verify.
   if (ProfileTiming) {
-    if (auto Err = Plugin::check(cuEventCreate(&TimingStart, CU_EVENT_DEFAULT),
-                                 "Error in cuEventCreate: %s"))
-      return Err;
-    if (auto Err = Plugin::check(cuEventCreate(&TimingStop, CU_EVENT_DEFAULT),
-                                 "Error in cuEventCreate: %s")) {
-      cuEventDestroy(TimingStart);
-      return Err;
+    const long Warmup = std::max(0L, envLong("LIBOMPTARGET_RR_TIMING_WARMUP", 0));
+    // GPU clocks ramp up from idle in steps over seconds; a fixed launch
+    // count is too short for small kernels, so also warm up for a minimum
+    // wall time.
+    const long WarmupMs = std::max(0L, envLong("LIBOMPTARGET_RR_TIMING_WARMUP_MS", 0));
+    const long Repeats = std::max(1L, envLong("LIBOMPTARGET_RR_TIMING_REPEATS", 1));
+    const long EnergyMinMs = std::max(0L, envLong("LIBOMPTARGET_RR_ENERGY_MIN_MS", 0));
+    CUresult Res = CUDA_SUCCESS;
+    CUdevice Device;
+    const bool HaveNvml = cuCtxGetDevice(&Device) == CUDA_SUCCESS && rrnvml::init(Device);
+    auto WarmStart = std::chrono::steady_clock::now();
+    long WarmLaunches = 0;
+    for (; Res == CUDA_SUCCESS; ++WarmLaunches) {
+      double ElapsedMs = std::chrono::duration<double, std::milli>(
+                             std::chrono::steady_clock::now() - WarmStart).count();
+      if (WarmLaunches >= Warmup && ElapsedMs >= WarmupMs)
+        break;
+      Res = Launch();
+      // Keep the queue shallow so elapsed time tracks GPU busy time.
+      if (Res == CUDA_SUCCESS && WarmLaunches % 8 == 7)
+        Res = cuStreamSynchronize(Stream);
     }
-    if (auto Err = Plugin::check(cuEventRecord(TimingStart, Stream),
-                                 "Error in cuEventRecord: %s")) {
-      cuEventDestroy(TimingStart);
-      cuEventDestroy(TimingStop);
-      return Err;
+    if (Res == CUDA_SUCCESS)
+      Res = cuStreamSynchronize(Stream);
+    if (Res == CUDA_SUCCESS && (Warmup > 0 || WarmupMs > 0))
+      printf("||ReplayWarmup|| launches: %ld sm_clock_mhz: %u\n", WarmLaunches,
+             HaveNvml ? rrnvml::smClockMHz() : 0);
+
+    CUevent Start = nullptr, Stop = nullptr;
+    if (Res == CUDA_SUCCESS)
+      Res = cuEventCreate(&Start, CU_EVENT_DEFAULT);
+    if (Res == CUDA_SUCCESS)
+      Res = cuEventCreate(&Stop, CU_EVENT_DEFAULT);
+    std::vector<float> Samples;
+    for (long I = 0; I < Repeats && Res == CUDA_SUCCESS; ++I) {
+      float Ms = 0.0f;
+      Res = cuEventRecord(Start, Stream);
+      if (Res == CUDA_SUCCESS)
+        Res = Launch();
+      if (Res == CUDA_SUCCESS)
+        Res = cuEventRecord(Stop, Stream);
+      if (Res == CUDA_SUCCESS)
+        Res = cuEventSynchronize(Stop);
+      if (Res == CUDA_SUCCESS)
+        Res = cuEventElapsedTime(&Ms, Start, Stop);
+      if (Res == CUDA_SUCCESS) {
+        Samples.push_back(Ms);
+        printf("||ReplayTimingSample|| duration_seconds: %.9g\n", Ms / 1.0e3);
+      }
     }
+    if (Start)
+      cuEventDestroy(Start);
+    if (Stop)
+      cuEventDestroy(Stop);
+
+    double MedianMs = 0.0;
+    if (Res == CUDA_SUCCESS && !Samples.empty()) {
+      std::vector<float> Sorted(Samples);
+      std::sort(Sorted.begin(), Sorted.end());
+      size_t N = Sorted.size();
+      MedianMs = N % 2 ? Sorted[N / 2] : 0.5 * (Sorted[N / 2 - 1] + Sorted[N / 2]);
+      printf("||ReplayTiming|| duration_seconds: %.9g\n", MedianMs / 1.0e3);
+      if (HaveNvml)
+        printf("||ReplayClock|| sm_clock_mhz: %u\n", rrnvml::smClockMHz());
+    }
+
+    if (Res == CUDA_SUCCESS && EnergyMinMs > 0 && HaveNvml) {
+      long Launches = std::max(1L, (long)std::ceil(EnergyMinMs / std::max(MedianMs, 1e-3)));
+      Launches = std::min(Launches, 1000000L);
+      unsigned long long E0 = 0, E1 = 0;
+      bool Ok = rrnvml::energyMilliJoules(E0);
+      auto T0 = std::chrono::steady_clock::now();
+      for (long I = 0; I < Launches && Res == CUDA_SUCCESS; ++I)
+        Res = Launch();
+      if (Res == CUDA_SUCCESS)
+        Res = cuStreamSynchronize(Stream);
+      auto T1 = std::chrono::steady_clock::now();
+      Ok = Ok && rrnvml::energyMilliJoules(E1) && Res == CUDA_SUCCESS;
+      double Seconds = std::chrono::duration<double>(T1 - T0).count();
+      if (Ok && E1 > E0)
+        printf("||ReplayEnergy|| joules_per_launch: %.9g avg_power_w: %.6g "
+               "launches: %ld window_seconds: %.6g\n",
+               (E1 - E0) / 1.0e3 / Launches, (E1 - E0) / 1.0e3 / Seconds,
+               Launches, Seconds);
+      else if (Res == CUDA_SUCCESS)
+        printf("||ReplayEnergy|| unavailable\n");
+    }
+    return Plugin::check(Res, "Error in timed replay of '%s': %s", getName());
   }
- 
+
    // Setup metrics
   std::vector<std::string> MetricNames = {
     "achieved_occupancy",
@@ -1084,26 +1226,8 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   if (ProfileMetrics)
     nvmetrics::measureMetricsStart(MetricIDs);
   
-  CUresult Res =
-      cuLaunchKernel(Func, NumBlocks, /* gridDimY */ 1,
-                     /* gridDimZ */ 1, NumThreads,
-                     /* blockDimY */ 1, /* blockDimZ */ 1, DynamicMemorySize,
-                     Stream, (void **)KernelArgs, nullptr);
+  CUresult Res = Launch();
 
-  if (ProfileTiming && Res == CUDA_SUCCESS) {
-    Res = cuEventRecord(TimingStop, Stream);
-    if (Res == CUDA_SUCCESS)
-      Res = cuEventSynchronize(TimingStop);
-    float DurationMs = 0.0f;
-    if (Res == CUDA_SUCCESS)
-      Res = cuEventElapsedTime(&DurationMs, TimingStart, TimingStop);
-    if (Res == CUDA_SUCCESS)
-      printf("||ReplayTiming|| duration_seconds: %.9g\n", DurationMs / 1.0e3);
-  }
-  if (ProfileTiming) {
-    cuEventDestroy(TimingStart);
-    cuEventDestroy(TimingStop);
-  }
 
   // Stop measurement
   std::vector<double> MetricResults(MetricIDs.size(), 0.0);
