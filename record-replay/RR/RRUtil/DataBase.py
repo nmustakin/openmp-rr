@@ -335,6 +335,13 @@ class DB:
                 flat.append(value)
         return [0.0 if value is None else value for value in flat]
 
+    def CopyEntry(self, key, other):
+        """Copy one configuration's measurements from another DB."""
+        import copy
+        self.Data[key] = copy.deepcopy(other.Data[key])
+        self.Data[key]['count'] = 1
+        self.Update()
+
     def AddSamples(self, key, duration, energy):
         """Append extra timing/energy samples to an existing valid entry."""
         if key not in self.Data or not self.Data[key]['valid']:

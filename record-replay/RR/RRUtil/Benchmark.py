@@ -39,6 +39,8 @@ class Kernel:
     BaselineEvery = int(os.environ.get('RR_BASELINE_EVERY', 20))
     ExclusiveWaitSeconds = int(os.environ.get('RR_EXCLUSIVE_WAIT_SECONDS', 3600))
     ContendedRetries = int(os.environ.get('RR_CONTENDED_RETRIES', 5))
+    # Replay processes per configuration (each runs warm-up + repeats).
+    TimingTries = int(os.environ.get('RR_TIMING_TRIES', 5))
 
     class OMPReplayer:
         def __init__(self, MaxMem):
@@ -515,6 +517,72 @@ class Kernel:
 
         optimize(self, **kwargs)
 
+    def Search(self, algorithm, objectives, budget, initSamples, seed, cacheDB=None,
+               device=0, **kwargs):
+        """Search with a pluggable strategy (RRUtil.Search).
+
+        `budget` counts suggestions, as Kernel.BO does (a suggestion that
+        rounds to an already-evaluated config still consumes budget).
+        `cacheDB` is a DB path shared by runs on the same kernel and GPU: a
+        config measured by an earlier run is reused instead of re-measured.
+        Results go to the DB named by getDBName under self.dbDir.
+        """
+        from RRUtil.Search import make_searcher, objective_values
+        pBounds = self.getBounds(**kwargs)
+        searcher = make_searcher(algorithm, pBounds, seed, initSamples, objectives)
+        db = DB(self.getDBName(**kwargs), self.getDefaultKey())
+        db.setMeasurementSchema(self.MeasurementSchema)
+        db.setMetadata({'args': {**kwargs, 'algorithm': algorithm, 'objectives': objectives,
+                                 'seed': seed, 'initSamples': initSamples},
+                        'bounds': pBounds, 'totalExperiments': budget})
+        cache = None
+        if cacheDB is not None:
+            cache = DB(cacheDB, self.getDefaultKey())
+            cache.setMeasurementSchema(self.MeasurementSchema)
+
+        def measure(config):
+            return self.sample(Tries=self.TimingTries, **config)
+
+        if self.getDefaultKey() not in db:
+            Valid, SStats, DStats, Duration, Energy, GLoads, GStores = measure({})
+            db.Add(self.getDefaultKey(), [SStats], DStats, [Duration], [Energy],
+                   [GLoads], [GStores], Valid)
+
+        trace = []
+        for step in range(budget):
+            point = searcher.ask()
+            config = self.convertPointToValues(point)
+            config['DeviceID'] = device
+            key = self.getConfigKey(config)
+            source = 'repeat'
+            if key not in db:
+                if cache is not None and key in cache:
+                    db.CopyEntry(key, cache)
+                    source = 'cache'
+                else:
+                    Valid, SStats, DStats, Duration, Energy, GLoads, GStores = measure(config)
+                    db.Add(key, [SStats], DStats, [Duration], [Energy], [GLoads],
+                           [GStores], Valid)
+                    if cache is not None:
+                        cache.CopyEntry(key, db)
+                    source = 'measured'
+            else:
+                db.Add(key, None, None, None, None, None, None, None)
+            if (self.BaselineEvery > 0 and (step + 1) % self.BaselineEvery == 0):
+                BValid, _, _, BDuration, BEnergy, _, _ = measure({})
+                if BValid:
+                    db.AddSamples(self.getDefaultKey(), BDuration, BEnergy)
+            values = objective_values(db.Speedup(key), db.EnergyImprov(key))
+            searcher.tell(point, values)
+            trace.append({'step': step, 'key': key, 'source': source,
+                          'speedup': db.Speedup(key), 'energy_gain': db.EnergyImprov(key)})
+            print(f'[{algorithm}/{"+".join(objectives)}/s{seed}] {step + 1}/{budget} '
+                  f'{source:8s} {key} speedup={trace[-1]["speedup"]:.4f} '
+                  f'energy_gain={trace[-1]["energy_gain"]:.4f}', flush=True)
+        pd.DataFrame(trace).to_csv(
+            f'{self.dbDir}/trace_{self.HashName}.csv', index=False)
+        return trace
+
     # returns isValid, SStats, DStats, execTime, execEnergy, gLoads, gStores
     def sample(self, **kwargs):
         Tries = kwargs.pop('Tries', 5)
@@ -522,7 +590,7 @@ class Kernel:
         NumThreads = kwargs.get('NumThreads', None)
         NumTeams = kwargs.get('NumTeams', None)
        
-        device_handle = pynvml.nvmlDeviceGetHandleByIndex(deviceID)
+        device_handle = self._nvml_handle(deviceID)
         StaticStats = self.Profiler.deviceCompile(self.original, self.Name, self.HashName, **kwargs)
         SStats = None
         if StaticStats:
@@ -546,6 +614,20 @@ class Kernel:
         end_energy = nvmlEnergy(device_handle)
 
         return True, SStats, DStats, durations, energies, GLoads, GStores
+
+    @staticmethod
+    def _nvml_handle(cuda_ordinal):
+        """NVML handle for a CUDA device ordinal.
+
+        NVML ignores CUDA_VISIBLE_DEVICES, so map the ordinal through it
+        (numeric entries, CUDA_DEVICE_ORDER=PCI_BUS_ID assumed).
+        """
+        visible = os.environ.get('CUDA_VISIBLE_DEVICES')
+        if visible:
+            entries = [v.strip() for v in visible.split(',') if v.strip()]
+            if all(v.isdigit() for v in entries) and cuda_ordinal < len(entries):
+                return pynvml.nvmlDeviceGetHandleByIndex(int(entries[cuda_ordinal]))
+        return pynvml.nvmlDeviceGetHandleByIndex(cuda_ordinal)
 
     @staticmethod
     def _foreign_gpu_processes(device_handle):
