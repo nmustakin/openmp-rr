@@ -335,6 +335,12 @@ class DB:
                 flat.append(value)
         return [0.0 if value is None else value for value in flat]
 
+    def SetMetrics(self, key, metrics):
+        """Attach the profiler metrics measured for a configuration."""
+        if key in self.Data and metrics:
+            self.Data[key]['metrics'] = dict(metrics)
+            self.Update()
+
     def CopyEntry(self, key, other):
         """Copy one configuration's measurements from another DB."""
         import copy

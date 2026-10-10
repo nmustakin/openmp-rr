@@ -41,6 +41,30 @@ class Kernel:
     ContendedRetries = int(os.environ.get('RR_CONTENDED_RETRIES', 5))
     # Replay processes per configuration (each runs warm-up + repeats).
     TimingTries = int(os.environ.get('RR_TIMING_TRIES', 5))
+    # Opt-in early stop: if the baseline already saturates the SM pipes
+    # (sm__throughput % of peak above this, e.g. 80), cut the search budget
+    # to SaturatedBudget suggestions. On 10 LULESH kernels every kernel above
+    # 83% had <= 1.05x to gain and every kernel with a real gain was <= 51%
+    # (experiment-archives/metric-search-2026-10-10). 0 disables.
+    SaturatedSMPct = float(os.environ.get('RR_SATURATED_SM_PCT', 0))
+    SaturatedBudget = int(os.environ.get('RR_SATURATED_BUDGET', 15))
+    # Extra perfworks metrics collected in the metrics replay (validated on
+    # T4 / sm_75). Request counts do not vary with launch configuration;
+    # these capture traffic, cache behaviour, utilisation and spills.
+    ExtraMetrics = os.environ.get('RR_EXTRA_METRICS', ','.join([
+        'dram__throughput.avg.pct_of_peak_sustained_elapsed',
+        'sm__throughput.avg.pct_of_peak_sustained_elapsed',
+        'lts__t_sectors.sum',
+        'lts__t_sector_hit_rate.pct',
+        'l1tex__t_sector_hit_rate.pct',
+        'l1tex__t_sectors_pipe_lsu_mem_global_op_ld.sum',
+        'smsp__inst_executed.sum',
+        'sm__inst_executed_pipe_fp64.sum',
+        'sm__pipe_fp64_cycles_active.avg.pct_of_peak_sustained_active',
+        'sm__cycles_active.avg',
+        'smsp__thread_inst_executed_per_inst_executed.ratio',
+        'smsp__average_warp_latency_issue_stalled_long_scoreboard.ratio',
+        'gpu__time_duration.sum']))
 
     class OMPReplayer:
         def __init__(self, MaxMem):
@@ -72,6 +96,8 @@ class Kernel:
             env_vars['LIBOMPTARGET_RR_PROFILE_METRICS'] = int(profile_metrics)
             env_vars['LIBOMPTARGET_RR_PROFILE_ACTIVITIES'] = int(profile_activities)
             env_vars['LIBOMPTARGET_RR_PROFILE_TIMING'] = int(profile_timing)
+            if profile_metrics and Kernel.ExtraMetrics:
+                env_vars['LIBOMPTARGET_RR_EXTRA_METRICS'] = Kernel.ExtraMetrics
             if profile_timing:
                 env_vars['LIBOMPTARGET_RR_TIMING_WARMUP'] = Kernel.TimingWarmup
                 env_vars['LIBOMPTARGET_RR_TIMING_WARMUP_MS'] = Kernel.TimingWarmupMs
@@ -100,9 +126,10 @@ class Kernel:
         self.Metrics = {}
 
     def getTripCount(self):
-        with open(f'{self.HashName}.json', 'r') as fd:
-            desc = json.load(fd)
-        return desc['LoopTripCount']
+        if getattr(self, '_trip_count', None) is None:
+            with open(f'{self.HashName}.json', 'r') as fd:
+                self._trip_count = json.load(fd)['LoopTripCount']
+        return self._trip_count
 
     def isWorkShare(self):
         if self.getTripCount() > 0:
@@ -474,6 +501,8 @@ class Kernel:
                 if not (key in db):
                     Valid, SStats, DStats, Duration, Energy, GLoads, GStores = self.sample(Tries=5, **config)
                 db.Add(key, [SStats], DStats, [Duration], [Energy],[GLoads], [GStores], Valid)
+                if Valid and getattr(self, 'LastMetrics', None):
+                    db.SetMetrics(key, self.LastMetrics)
                 # Re-measure the baseline periodically so speedups are taken
                 # against a baseline that averages over the run's drift.
                 if (self.BaselineEvery > 0 and
@@ -518,7 +547,7 @@ class Kernel:
         optimize(self, **kwargs)
 
     def Search(self, algorithm, objectives, budget, initSamples, seed, cacheDB=None,
-               device=0, **kwargs):
+               device=0, compileTable=None, **kwargs):
         """Search with a pluggable strategy (RRUtil.Search).
 
         `budget` counts suggestions, as Kernel.BO does (a suggestion that
@@ -527,9 +556,26 @@ class Kernel:
         config measured by an earlier run is reused instead of re-measured.
         Results go to the DB named by getDBName under self.dbDir.
         """
-        from RRUtil.Search import make_searcher, objective_values
+        from RRUtil.Search import (make_searcher, objective_values,
+                                   build_compile_table, compile_features)
         pBounds = self.getBounds(**kwargs)
-        searcher = make_searcher(algorithm, pBounds, seed, initSamples, objectives)
+        featurize = None
+        if algorithm == 'trees-config':
+            def featurize(point):
+                key = self.getConfigKey({**self.convertPointToValues(point), 'DeviceID': device})
+                return [point[k] for k in sorted(point)], False, key
+        elif algorithm == 'trees-meta':
+            table = build_compile_table(
+                self, compileTable or f'{self.dbDir}/compile_table.json')
+            trip_count = self.getTripCount()
+
+            def featurize(point):
+                config = self.convertPointToValues(point)
+                key = self.getConfigKey({**config, 'DeviceID': device})
+                f, invalid = compile_features(config, table, trip_count)
+                return f, invalid, key
+        searcher = make_searcher(algorithm, pBounds, seed, initSamples, objectives,
+                                 featurize)
         db = DB(self.getDBName(**kwargs), self.getDefaultKey())
         db.setMeasurementSchema(self.MeasurementSchema)
         db.setMetadata({'args': {**kwargs, 'algorithm': algorithm, 'objectives': objectives,
@@ -547,6 +593,15 @@ class Kernel:
             Valid, SStats, DStats, Duration, Energy, GLoads, GStores = measure({})
             db.Add(self.getDefaultKey(), [SStats], DStats, [Duration], [Energy],
                    [GLoads], [GStores], Valid)
+            if Valid:
+                db.SetMetrics(self.getDefaultKey(), getattr(self, 'LastMetrics', {}))
+
+        base_metrics = db.Data.get(self.getDefaultKey(), {}).get('metrics', {})
+        sm_pct = base_metrics.get('sm__throughput.avg.pct_of_peak_sustained_elapsed')
+        if self.SaturatedSMPct > 0 and sm_pct is not None and sm_pct > self.SaturatedSMPct:
+            print(f'Baseline SM throughput {sm_pct:.1f}% > {self.SaturatedSMPct}%: '
+                  f'compute-saturated, budget {budget} -> {self.SaturatedBudget}', flush=True)
+            budget = min(budget, self.SaturatedBudget)
 
         trace = []
         for step in range(budget):
@@ -563,6 +618,8 @@ class Kernel:
                     Valid, SStats, DStats, Duration, Energy, GLoads, GStores = measure(config)
                     db.Add(key, [SStats], DStats, [Duration], [Energy], [GLoads],
                            [GStores], Valid)
+                    if Valid:
+                        db.SetMetrics(key, getattr(self, 'LastMetrics', {}))
                     if cache is not None:
                         cache.CopyEntry(key, db)
                     source = 'measured'
@@ -672,6 +729,8 @@ class Kernel:
         activities_file = Path('kernel_activities.csv')
         #print("MaxIters ", maxIters)
         contended_retries = 0
+        clocks = []
+        self.LastMetrics = {}
         while len(durations) < maxIters:
             activities_file.unlink(missing_ok=True)
             # Another process on this GPU slows the kernel and pollutes the
@@ -699,6 +758,9 @@ class Kernel:
                 print('Replay did not report a device kernel duration')
                 return [], [], [], [], []
             durations.append(float(timing_match.group(1)))
+            clock_match = re.search(r'\|\|ReplayClock\|\| sm_clock_mhz: (\d+)', stdout)
+            if clock_match:
+                clocks.append(float(clock_match.group(1)))
             # Kernel-level energy from the plugin's back-to-back launch window.
             # Process-level NVML energy (replay start-up, data loading) is
             # dominated by overhead unrelated to the launch configuration.
@@ -727,6 +789,12 @@ class Kernel:
                                               dropSingleTeams)[self.Name]
         finally:
             activities_file.unlink(missing_ok=True)
+        # All metrics printed by the plugin, plus the SM clock seen during
+        # the timing replays. Stored per config via DB.SetMetrics.
+        self.LastMetrics = {m.group(1): float(m.group(2)) for m in re.finditer(
+            r'\|\|NVMetric\|\| (\S+): (\S+)', stdout)}
+        if clocks:
+            self.LastMetrics['sm_clock_mhz'] = float(np.median(clocks))
         global_loads.append(kernelDescr.pop('GLoads', None))
         global_stores.append(kernelDescr.pop('GStores', None))
         results.append(list(kernelDescr.values()))

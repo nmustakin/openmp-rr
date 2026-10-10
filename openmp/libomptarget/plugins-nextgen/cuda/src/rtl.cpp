@@ -1222,6 +1222,23 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
     "l1tex__t_requests_pipe_lsu_mem_local_op_ld.sum",
     "l1tex__t_requests_pipe_lsu_mem_local_op_st.sum"
   };
+  // Additional perfworks metrics (comma-separated full names, e.g.
+  // dram__throughput.avg.pct_of_peak_sustained_elapsed). Every metric,
+  // including the fixed ones above, is printed as ||NVMetric|| name: value.
+  if (ProfileMetrics) {
+    if (const char *Extra = std::getenv("LIBOMPTARGET_RR_EXTRA_METRICS")) {
+      std::string List(Extra);
+      size_t Pos = 0;
+      while (Pos <= List.size()) {
+        size_t End = List.find(',', Pos);
+        if (End == std::string::npos)
+          End = List.size();
+        if (End > Pos)
+          MetricIDs.push_back(List.substr(Pos, End - Pos));
+        Pos = End + 1;
+      }
+    }
+  }
   // Start measurement
   if (ProfileMetrics)
     nvmetrics::measureMetricsStart(MetricIDs);
@@ -1244,6 +1261,8 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
     fprintf(fp, ",%lf,%lf,%lf,%lf\n", MetricResults[4], MetricResults[5],
                                       MetricResults[0], MetricResults[1]);
     finalizeFile();
+    for (size_t I = 0; I < MetricIDs.size(); ++I)
+      printf("||NVMetric|| %s: %.9g\n", MetricIDs[I].c_str(), MetricResults[I]);
   }
 
   return Plugin::check(Res, "Error in cuLaunchKernel for '%s': %s", getName());
