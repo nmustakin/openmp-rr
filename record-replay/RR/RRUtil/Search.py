@@ -145,6 +145,39 @@ def build_compile_table(kernel, path):
     return table
 
 
+def classify_bottleneck(metrics, sm_saturated=80.0):
+    """Bottleneck class of a kernel from its baseline metrics.
+
+    `metrics` should be the per-metric median of several baseline samples.
+    Rules from experiment-archives/metric-search-2026-10-10 (10 LULESH kernels):
+    compute-saturated kernels had nothing to gain; locality-bound kernels gain
+    by cutting DRAM traffic; register-bound kernels gain from launch bounds.
+    """
+    sm = metrics.get('sm__throughput.avg.pct_of_peak_sustained_elapsed')
+    dram = metrics.get('dram__throughput.avg.pct_of_peak_sustained_elapsed')
+    occ = metrics.get('sm__warps_active.avg.pct_of_peak_sustained_active')
+    spill = metrics.get('l1tex__t_requests_pipe_lsu_mem_local_op_ld.sum', 0) or 0
+    if sm is None or dram is None or occ is None:
+        return 'unknown'
+    # Compute-saturated means the SM pipes are busy *and* memory is not: a
+    # memory-heavy kernel profiled while power-capped (lower SM clock) can
+    # show high SM utilisation too (l844 read 52-88%; its DRAM was 69-88%,
+    # while the compute-saturated kernels stayed <= 66%).
+    if sm > sm_saturated and dram < 70:
+        return 'compute'
+    if occ > 80 and dram > 70:
+        return 'locality'
+    if spill > 0 or occ < 60:
+        return 'register'
+    return 'other'
+
+
+def _z(values):
+    import numpy as np
+    v = np.asarray(values, float)
+    return (v - v.mean()) / (v.std() + 1e-12)
+
+
 class TreesSearcher:
     """ExtraTrees surrogate + expected improvement over random candidates.
 
@@ -153,9 +186,15 @@ class TreesSearcher:
     proposed, and candidates mapping to an evaluated config are skipped.
     """
 
-    def __init__(self, bounds, seed, n_init, objectives, featurize, n_candidates=1500):
+    def __init__(self, bounds, seed, n_init, objectives, featurize, n_candidates=1500,
+                 target='objective'):
         import numpy as np
         assert len(objectives) == 1, 'trees is single-objective'
+        # target='register-mix' steers by 0.5 z(log speedup) + 0.5 z(condition),
+        # condition = mean of z(-log1p spill loads) and z(occupancy); all
+        # observations are relabelled at every step.
+        self.target = target
+        self.raw = []
         self.np, self.rng = np, np.random.default_rng(seed)
         self.bounds, self.names = bounds, list(bounds)
         self.n_init, self.objective, self.featurize = n_init, objectives[0], featurize
@@ -187,18 +226,19 @@ class TreesSearcher:
             return cands[0][0] if cands else dict(zip(self.names, self._random(1)[0]))
         from sklearn.ensemble import ExtraTreesRegressor
         arr = self._random(self.n_candidates)
-        top = np.argsort(self.y)[-5:]
+        top = np.argsort(self._targets())[-5:]
         local = [np.clip(np.array([self.points[i][k] for k in self.names]) +
                          self.rng.normal(0, 0.05, (60, len(self.names))), 1e-9, 1.0) for i in top]
         cands = self._usable(np.vstack([arr] + local))
         if not cands:
             return dict(zip(self.names, self._random(1)[0]))
+        y = self._targets()
         model = ExtraTreesRegressor(200, min_samples_leaf=2, random_state=self.seed).fit(
-            np.array(self.F), np.array(self.y))
+            np.array(self.F), y)
         Fc = np.array([c[1] for c in cands])
         per_tree = np.stack([t.predict(Fc) for t in model.estimators_])
         mu, sd = per_tree.mean(0), np.maximum(per_tree.std(0), 1e-9)
-        best = max(self.y)
+        best = y.max()
         from scipy.stats import norm
         z = (mu - best) / sd
         ei = (mu - best) * norm.cdf(z) + sd * norm.pdf(z)
@@ -212,12 +252,25 @@ class TreesSearcher:
             self.F.append(f)
             self.y.append(v)
             self.points.append(point)
+            self.raw.append((values.get('spill', 0.0), values.get('occupancy', float('nan'))))
+
+    def _targets(self):
+        np = self.np
+        y = np.array(self.y)
+        if self.target != 'register-mix':
+            return y
+        spill = np.array([r[0] for r in self.raw], float)
+        occ = np.array([r[1] for r in self.raw], float)
+        occ = np.where(np.isnan(occ), np.nanmean(occ) if np.isfinite(occ).any() else 0, occ)
+        condition = 0.5 * _z(-np.log1p(spill)) + 0.5 * _z(occ)
+        return 0.5 * _z(y) + 0.5 * condition
 
 
-def make_searcher(algorithm, bounds, seed, n_init, objectives, featurize=None):
+def make_searcher(algorithm, bounds, seed, n_init, objectives, featurize=None,
+                  target='objective'):
     if algorithm in ('trees-config', 'trees-meta'):
         assert featurize is not None, f'{algorithm} needs a featurizer'
-        return TreesSearcher(bounds, seed, n_init, objectives, featurize)
+        return TreesSearcher(bounds, seed, n_init, objectives, featurize, target=target)
     if algorithm == 'bo':
         return BOSearcher(bounds, seed, n_init, objectives)
     if algorithm in ('tpe', 'random', 'motpe'):

@@ -1239,6 +1239,30 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
       }
     }
   }
+  // Utilisation metrics (% of peak) depend on the SM clock, which ramps up
+  // from idle over ~0.5 s; warm up before profiling so they are taken at a
+  // steady clock. Counts (sectors, requests) are clock-independent.
+  const long MetricsWarmupMs =
+      ProfileMetrics ? std::max(0L, envLong("LIBOMPTARGET_RR_METRICS_WARMUP_MS", 0)) : 0;
+  if (MetricsWarmupMs > 0) {
+    auto Start = std::chrono::steady_clock::now();
+    CUresult WarmRes = CUDA_SUCCESS;
+    for (long I = 0; WarmRes == CUDA_SUCCESS; ++I) {
+      if (std::chrono::duration<double, std::milli>(
+              std::chrono::steady_clock::now() - Start).count() >= MetricsWarmupMs)
+        break;
+      WarmRes = Launch();
+      if (WarmRes == CUDA_SUCCESS && I % 8 == 7)
+        WarmRes = cuStreamSynchronize(Stream);
+    }
+    if (WarmRes == CUDA_SUCCESS)
+      WarmRes = cuStreamSynchronize(Stream);
+    if (WarmRes != CUDA_SUCCESS)
+      return Plugin::check(WarmRes, "Error in metrics warm-up of '%s': %s", getName());
+    CUdevice Device;
+    if (cuCtxGetDevice(&Device) == CUDA_SUCCESS && rrnvml::init(Device))
+      printf("||MetricsClock|| sm_clock_mhz: %u\n", rrnvml::smClockMHz());
+  }
   // Start measurement
   if (ProfileMetrics)
     nvmetrics::measureMetricsStart(MetricIDs);

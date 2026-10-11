@@ -48,6 +48,8 @@ class Kernel:
     # (experiment-archives/metric-search-2026-10-10). 0 disables.
     SaturatedSMPct = float(os.environ.get('RR_SATURATED_SM_PCT', 0))
     SaturatedBudget = int(os.environ.get('RR_SATURATED_BUDGET', 15))
+    # Baseline metric samples whose median classifies the kernel (adaptive).
+    ClassifySamples = int(os.environ.get('RR_CLASSIFY_SAMPLES', 3))
     # Extra perfworks metrics collected in the metrics replay (validated on
     # T4 / sm_75). Request counts do not vary with launch configuration;
     # these capture traffic, cache behaviour, utilisation and spills.
@@ -98,6 +100,8 @@ class Kernel:
             env_vars['LIBOMPTARGET_RR_PROFILE_TIMING'] = int(profile_timing)
             if profile_metrics and Kernel.ExtraMetrics:
                 env_vars['LIBOMPTARGET_RR_EXTRA_METRICS'] = Kernel.ExtraMetrics
+            if profile_metrics:
+                env_vars['LIBOMPTARGET_RR_METRICS_WARMUP_MS'] = Kernel.TimingWarmupMs
             if profile_timing:
                 env_vars['LIBOMPTARGET_RR_TIMING_WARMUP'] = Kernel.TimingWarmup
                 env_vars['LIBOMPTARGET_RR_TIMING_WARMUP_MS'] = Kernel.TimingWarmupMs
@@ -555,32 +559,20 @@ class Kernel:
         `cacheDB` is a DB path shared by runs on the same kernel and GPU: a
         config measured by an earlier run is reused instead of re-measured.
         Results go to the DB named by getDBName under self.dbDir.
-        """
-        from RRUtil.Search import (make_searcher, objective_values,
-                                   build_compile_table, compile_features)
-        pBounds = self.getBounds(**kwargs)
-        featurize = None
-        if algorithm == 'trees-config':
-            def featurize(point):
-                key = self.getConfigKey({**self.convertPointToValues(point), 'DeviceID': device})
-                return [point[k] for k in sorted(point)], False, key
-        elif algorithm == 'trees-meta':
-            table = build_compile_table(
-                self, compileTable or f'{self.dbDir}/compile_table.json')
-            trip_count = self.getTripCount()
 
-            def featurize(point):
-                config = self.convertPointToValues(point)
-                key = self.getConfigKey({**config, 'DeviceID': device})
-                f, invalid = compile_features(config, table, trip_count)
-                return f, invalid, key
-        searcher = make_searcher(algorithm, pBounds, seed, initSamples, objectives,
-                                 featurize)
+        algorithm='adaptive' classifies the kernel from its baseline metrics
+        (Search.classify_bottleneck) and then searches the speedup objective
+        with the strategy that suited that class:
+          compute  -> tpe, budget cut to SaturatedBudget
+          register -> trees-meta (compile-time features) steering by
+                      speedup mixed with spill loads and occupancy
+          other    -> tpe
+        """
+        from RRUtil.Search import (make_searcher, objective_values, build_compile_table,
+                                   compile_features, classify_bottleneck)
+        pBounds = self.getBounds(**kwargs)
         db = DB(self.getDBName(**kwargs), self.getDefaultKey())
         db.setMeasurementSchema(self.MeasurementSchema)
-        db.setMetadata({'args': {**kwargs, 'algorithm': algorithm, 'objectives': objectives,
-                                 'seed': seed, 'initSamples': initSamples},
-                        'bounds': pBounds, 'totalExperiments': budget})
         cache = None
         if cacheDB is not None:
             cache = DB(cacheDB, self.getDefaultKey())
@@ -595,13 +587,63 @@ class Kernel:
                    [GLoads], [GStores], Valid)
             if Valid:
                 db.SetMetrics(self.getDefaultKey(), getattr(self, 'LastMetrics', {}))
-
         base_metrics = db.Data.get(self.getDefaultKey(), {}).get('metrics', {})
-        sm_pct = base_metrics.get('sm__throughput.avg.pct_of_peak_sustained_elapsed')
-        if self.SaturatedSMPct > 0 and sm_pct is not None and sm_pct > self.SaturatedSMPct:
-            print(f'Baseline SM throughput {sm_pct:.1f}% > {self.SaturatedSMPct}%: '
-                  f'compute-saturated, budget {budget} -> {self.SaturatedBudget}', flush=True)
-            budget = min(budget, self.SaturatedBudget)
+
+        strategy, target, klass = algorithm, 'objective', None
+        if algorithm == 'adaptive':
+            # Classify from the median of several baseline metric samples; a
+            # single profiled launch can be power-throttled.
+            samples = db.Data[self.getDefaultKey()].get('metrics_samples', [base_metrics])
+            while len(samples) < self.ClassifySamples:
+                BValid, _, _, BDuration, BEnergy, _, _ = measure({})
+                if not BValid:
+                    break
+                db.AddSamples(self.getDefaultKey(), BDuration, BEnergy)
+                samples.append(dict(getattr(self, 'LastMetrics', {})))
+            db.Data[self.getDefaultKey()]['metrics_samples'] = samples
+            db.Update()
+            names = set().union(*[m.keys() for m in samples])
+            median = {n: float(np.median([m[n] for m in samples if n in m])) for n in names}
+            klass = classify_bottleneck(median, self.SaturatedSMPct or 80.0)
+            if klass == 'register':
+                strategy, target = 'trees-meta', 'register-mix'
+            else:
+                strategy = 'tpe'
+            if klass == 'compute':
+                budget = min(budget, self.SaturatedBudget)
+            print(f'Adaptive: kernel classified {klass}; strategy {strategy}, target '
+                  f'{target}, budget {budget}', flush=True)
+        else:
+            sm_pct = base_metrics.get('sm__throughput.avg.pct_of_peak_sustained_elapsed')
+            if self.SaturatedSMPct > 0 and sm_pct is not None and sm_pct > self.SaturatedSMPct:
+                print(f'Baseline SM throughput {sm_pct:.1f}% > {self.SaturatedSMPct}%: '
+                      f'compute-saturated, budget {budget} -> {self.SaturatedBudget}', flush=True)
+                budget = min(budget, self.SaturatedBudget)
+        db.setMetadata({'args': {**kwargs, 'algorithm': algorithm, 'strategy': strategy,
+                                 'target': target, 'class': klass, 'objectives': objectives,
+                                 'seed': seed, 'initSamples': initSamples},
+                        'bounds': pBounds, 'totalExperiments': budget})
+
+        featurize = None
+        if strategy == 'trees-config':
+            def featurize(point):
+                key = self.getConfigKey({**self.convertPointToValues(point), 'DeviceID': device})
+                return [point[k] for k in sorted(point)], False, key
+        elif strategy == 'trees-meta':
+            table = build_compile_table(
+                self, compileTable or f'{self.dbDir}/compile_table.json')
+            trip_count = self.getTripCount()
+
+            def featurize(point):
+                config = self.convertPointToValues(point)
+                key = self.getConfigKey({**config, 'DeviceID': device})
+                f, invalid = compile_features(config, table, trip_count)
+                return f, invalid, key
+        searcher = make_searcher(strategy, pBounds, seed, initSamples, objectives,
+                                 featurize, target)
+        # The register-mix target needs metrics for every observed config, so
+        # cached entries measured before metrics were collected are re-measured.
+        need_metrics = target != 'objective'
 
         trace = []
         for step in range(budget):
@@ -611,7 +653,10 @@ class Kernel:
             key = self.getConfigKey(config)
             source = 'repeat'
             if key not in db:
-                if cache is not None and key in cache:
+                cached = cache is not None and key in cache and (
+                    not need_metrics or not cache.Data[key]['valid']
+                    or 'metrics_warmup_ms' in cache.Data[key].get('metrics', {}))
+                if cached:
                     db.CopyEntry(key, cache)
                     source = 'cache'
                 else:
@@ -630,8 +675,12 @@ class Kernel:
                 if BValid:
                     db.AddSamples(self.getDefaultKey(), BDuration, BEnergy)
             values = objective_values(db.Speedup(key), db.EnergyImprov(key))
+            metrics = db.Data[key].get('metrics', {})
+            values['spill'] = metrics.get('l1tex__t_requests_pipe_lsu_mem_local_op_ld.sum', 0.0)
+            values['occupancy'] = metrics.get(
+                'sm__warps_active.avg.pct_of_peak_sustained_active', float('nan'))
             searcher.tell(point, values)
-            trace.append({'step': step, 'key': key, 'source': source,
+            trace.append({'step': step, 'key': key, 'source': source, 'class': klass,
                           'speedup': db.Speedup(key), 'energy_gain': db.EnergyImprov(key)})
             print(f'[{algorithm}/{"+".join(objectives)}/s{seed}] {step + 1}/{budget} '
                   f'{source:8s} {key} speedup={trace[-1]["speedup"]:.4f} '
@@ -795,6 +844,12 @@ class Kernel:
             r'\|\|NVMetric\|\| (\S+): (\S+)', stdout)}
         if clocks:
             self.LastMetrics['sm_clock_mhz'] = float(np.median(clocks))
+        # Utilisation metrics are only comparable when profiled at a steady
+        # clock; tag them so consumers can ignore metrics from cold replays.
+        metrics_clock = re.search(r'\|\|MetricsClock\|\| sm_clock_mhz: (\d+)', stdout)
+        if metrics_clock:
+            self.LastMetrics['metrics_warmup_ms'] = float(Kernel.TimingWarmupMs)
+            self.LastMetrics['metrics_sm_clock_mhz'] = float(metrics_clock.group(1))
         global_loads.append(kernelDescr.pop('GLoads', None))
         global_stores.append(kernelDescr.pop('GStores', None))
         results.append(list(kernelDescr.values()))
