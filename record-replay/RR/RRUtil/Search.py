@@ -479,6 +479,53 @@ class TransferModelSearcher:
         return config_to_point(dict(MaxThreads=r.MaxThreads, MinTeams=r.MinTeams,
                                     NumThreads=r.NumThreads, NumTeams=r.NumTeams), self.trip)
 
+    def ask_many(self, n):
+        """Propose n candidates at once (batch evaluation).
+
+        Remaining portfolio points come first; the rest are the candidates with
+        the highest (prior-weighted) expected improvement, distinct from each
+        other and from everything already evaluated. `last_max_ei` holds the
+        largest expected improvement (log speedup) among unevaluated
+        candidates, for convergence-based stopping.
+        """
+        from sklearn.ensemble import ExtraTreesRegressor
+        from scipy.stats import norm
+        np = self.np
+        out, chosen = [], set()
+        while self.initial and len(out) < n:
+            point = self.initial.pop(0)
+            row = self._row_for(point)
+            if row is not None and row.canon not in self.seen and row.canon not in chosen:
+                chosen.add(row.canon)
+                out.append((point, row))
+        X = np.vstack([self.X0] + ([np.array(self.own_X)] if self.own_X else []))
+        y = np.r_[self.y0, np.array(self.own_y)] if self.own_y else self.y0
+        w = np.r_[np.ones(len(self.y0)), np.full(len(self.own_y), self.own_weight)]
+        m = ExtraTreesRegressor(150, min_samples_leaf=3, random_state=self.seed, n_jobs=2)
+        m.fit(X, y, sample_weight=w)
+        idx = np.flatnonzero(~self.cand.canon.isin(self.seen | chosen).values)
+        if len(idx) == 0:
+            self.last_max_ei = 0.0
+            return out
+        per = np.stack([t.predict(self.Xc[idx]) for t in m.estimators_])
+        mu, sd = per.mean(0), np.maximum(per.std(0), 1e-9)
+        best = max(self.own_y) if self.own_y else 0.0
+        z = (mu - best) / sd
+        ei = (mu - best) * norm.cdf(z) + sd * norm.pdf(z)
+        self.last_max_ei = float(ei.max())
+        score = ei * (self.prior_w[idx] ** (self.beta / max(1, len(self.own_y)))
+                      if self.prior_w is not None else 1.0)
+        for j in np.argsort(-score)[:max(0, n - len(out))]:
+            r = self.cand.iloc[idx[j]]
+            out.append((config_to_point(dict(MaxThreads=r.MaxThreads, MinTeams=r.MinTeams,
+                                             NumThreads=r.NumThreads, NumTeams=r.NumTeams),
+                                        self.trip), r))
+        return out
+
+    def tell_trial(self, row, values):
+        self.asked = row
+        self.tell(None, values)
+
     def tell(self, point, values):
         r = self.asked
         self.seen.add(r.canon)

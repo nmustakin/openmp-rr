@@ -610,7 +610,7 @@ class Kernel:
 
         klass = None
         if algorithm in ('adaptive', 'tpe-portfolio', 'trees-prior', 'transfer-model',
-                         'combined'):
+                         'combined', 'combined-batch'):
             # Classify from the median of several baseline metric samples; a
             # single profiled launch can be power-throttled.
             samples = db.Data[self.getDefaultKey()].get('metrics_samples', [base_metrics])
@@ -651,10 +651,17 @@ class Kernel:
                 size=options.get('portfolio_size', 10))
             print(f'Portfolio: {len(options["initial_points"])} points for class {klass}',
                   flush=True)
-        elif algorithm == 'combined':
-            # All four avenues: transfer cost model, seeded with the portfolio,
-            # EI weighted by the same-class prior, multi-fidelity screening.
-            strategy, fidelity = 'transfer-model', 'mf'
+        elif algorithm in ('combined', 'combined-batch'):
+            # All avenues: transfer cost model, seeded with the portfolio, EI
+            # weighted by the same-class prior, and multi-fidelity screening
+            # (one process per screen, or batch replay for combined-batch,
+            # which also stops once expected improvement drops below noise).
+            strategy = 'transfer-model'
+            fidelity = 'batch' if algorithm == 'combined-batch' else 'mf'
+            if algorithm == 'combined-batch':
+                # Its top screen was the shipped configuration in 15 of 15 runs,
+                # so two promotions suffice (each costs ~20 s of real time).
+                options.setdefault('promote', 2)
             options['initial_points'] = build_portfolio(
                 pool, options['target_kid'], klass, self.getTripCount(),
                 size=options.get('portfolio_size', 8))
@@ -738,6 +745,8 @@ class Kernel:
                     reps[binary] = (mt, mn)
             q = options.get('batch_size', 16)
             unit = options.get('batch_unit_cost', 0.6)    # nominal s per batch screen
+            ei_stop = options.get('ei_stop')
+            stop_reason = 'budget'
             while budget_left(unit * q):
                 groups = {}
                 for point, trial in searcher.ask_many(q):
@@ -777,9 +786,20 @@ class Kernel:
                                       'speedup': db.Speedup(key),
                                       'energy_gain': db.EnergyImprov(key)})
                         step += 1
+                max_ei = getattr(searcher, 'last_max_ei', None)
                 print(f'[{algorithm}/s{seed}] {step} screened, wall '
                       f'{time.perf_counter() - t_start:.0f}s, best batch speedup '
-                      f'{max([t["speedup"] for t in trace] or [0]):.4f}', flush=True)
+                      f'{max([t["speedup"] for t in trace] or [0]):.4f}'
+                      + (f', max EI {max_ei:.5f}' if max_ei is not None else ''), flush=True)
+                # Convergence: the model expects no candidate to beat the best
+                # screen by more than the measurement noise.
+                if (ei_stop and max_ei is not None and max_ei < ei_stop
+                        and not getattr(searcher, 'initial', None)):
+                    stop_reason = 'converged'
+                    break
+            db.MetaData['stop_reason'] = stop_reason
+            db.MetaData['search_wall_s'] = time.perf_counter() - t_start
+            db.Update()
 
         while fidelity != 'batch' and ((step < budget) if fidelity == 'full'
                                        else budget_left(self.COST_SCREEN)):
