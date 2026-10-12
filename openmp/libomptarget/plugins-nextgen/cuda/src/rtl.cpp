@@ -1114,7 +1114,13 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
     // GPU clocks ramp up from idle in steps over seconds; a fixed launch
     // count is too short for small kernels, so also warm up for a minimum
     // wall time.
-    const long WarmupMs = std::max(0L, envLong("LIBOMPTARGET_RR_TIMING_WARMUP_MS", 0));
+    // In a batch replay (several configurations per process) the GPU is already
+    // at a steady clock after the first configuration, so later ones only
+    // re-warm briefly (LIBOMPTARGET_RR_TIMING_REWARM_MS).
+    static bool Warmed = false;
+    const long WarmupMs = Warmed
+        ? std::max(0L, envLong("LIBOMPTARGET_RR_TIMING_REWARM_MS", 100))
+        : std::max(0L, envLong("LIBOMPTARGET_RR_TIMING_WARMUP_MS", 0));
     const long Repeats = std::max(1L, envLong("LIBOMPTARGET_RR_TIMING_REPEATS", 1));
     const long EnergyMinMs = std::max(0L, envLong("LIBOMPTARGET_RR_ENERGY_MIN_MS", 0));
     CUresult Res = CUDA_SUCCESS;
@@ -1137,6 +1143,8 @@ Error CUDAKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
     if (Res == CUDA_SUCCESS && (Warmup > 0 || WarmupMs > 0))
       printf("||ReplayWarmup|| launches: %ld sm_clock_mhz: %u\n", WarmLaunches,
              HaveNvml ? rrnvml::smClockMHz() : 0);
+    if (Res == CUDA_SUCCESS && WarmupMs > 0)
+      Warmed = true;
 
     CUevent Start = nullptr, Stop = nullptr;
     if (Res == CUDA_SUCCESS)

@@ -609,7 +609,8 @@ class Kernel:
         base_metrics = db.Data.get(self.getDefaultKey(), {}).get('metrics', {})
 
         klass = None
-        if algorithm in ('adaptive', 'tpe-portfolio', 'trees-prior', 'transfer-model'):
+        if algorithm in ('adaptive', 'tpe-portfolio', 'trees-prior', 'transfer-model',
+                         'combined'):
             # Classify from the median of several baseline metric samples; a
             # single profiled launch can be power-throttled.
             samples = db.Data[self.getDefaultKey()].get('metrics_samples', [base_metrics])
@@ -638,6 +639,11 @@ class Kernel:
                   f'{target}, budget {budget}', flush=True)
         elif algorithm == 'tpe-mf':
             strategy, fidelity = 'tpe', 'mf'
+        elif algorithm == 'tpe-batch':
+            # Multi-fidelity with batch screening: TPE proposals are timed many
+            # per replay process (Kernel.sample_batch), grouped by binary.
+            strategy, fidelity = 'tpe', 'batch'
+            options['constant_liar'] = True
         elif algorithm == 'tpe-portfolio':
             strategy = 'tpe'
             options['initial_points'] = build_portfolio(
@@ -645,6 +651,23 @@ class Kernel:
                 size=options.get('portfolio_size', 10))
             print(f'Portfolio: {len(options["initial_points"])} points for class {klass}',
                   flush=True)
+        elif algorithm == 'combined':
+            # All four avenues: transfer cost model, seeded with the portfolio,
+            # EI weighted by the same-class prior, multi-fidelity screening.
+            strategy, fidelity = 'transfer-model', 'mf'
+            options['initial_points'] = build_portfolio(
+                pool, options['target_kid'], klass, self.getTripCount(),
+                size=options.get('portfolio_size', 8))
+            others = pool[(pool.kid != options['target_kid']) & (pool.klass == klass)]
+            if others.empty:
+                others = pool[pool.kid != options['target_kid']]
+            top = others[others.speedup >= others.groupby('kid').speedup.transform(
+                lambda v: v.quantile(0.95))]
+            options['prior_points'] = [config_to_point(
+                dict(MaxThreads=r.MaxThreads, MinTeams=r.MinTeams, NumThreads=r.NumThreads,
+                     teams_frac=r.teams_frac), self.getTripCount()) for r in top.itertuples()]
+            print(f'Combined: class {klass}, {len(options["initial_points"])} portfolio points, '
+                  f'{len(options["prior_points"])} prior points', flush=True)
         elif algorithm == 'trees-prior':
             others = pool[(pool.kid != options['target_kid']) & (pool.klass == klass)]
             if others.empty:
@@ -669,7 +692,7 @@ class Kernel:
                         'bounds': pBounds, 'totalExperiments': budget})
 
         featurize, table = None, None
-        if strategy in ('trees-meta', 'transfer-model'):
+        if strategy in ('trees-meta', 'transfer-model') or fidelity == 'batch':
             table = build_compile_table(
                 self, compileTable or f'{self.dbDir}/compile_table.json')
         if strategy in ('trees-config', 'trees-prior'):
@@ -694,10 +717,72 @@ class Kernel:
 
         trace, spent = [], 0.0
         cost_budget = budget * self.COST_FULL
-        reserve = (options.get('promote', 5) * self.COST_PROMOTE) if fidelity == 'mf' else 0.0
+        # Optional real wall-clock budget (seconds) instead of the nominal cost.
+        wall_budget = options.get('wall_budget')
+        # A promotion (compile, two timing processes, warm metrics replay) takes
+        # ~25 s of real time on T4, more than its nominal timing cost.
+        promote_cost = 25.0 if wall_budget else self.COST_PROMOTE
+        reserve = (options.get('promote', 5) * promote_cost) if fidelity != 'full' else 0.0
+        t_start = time.perf_counter()
         step = 0
-        while (step < budget) if fidelity == 'full' else (spent + self.COST_SCREEN + reserve
-                                                            <= cost_budget):
+
+        def budget_left(unit):
+            if wall_budget:
+                return time.perf_counter() - t_start + reserve < wall_budget
+            return spent + unit + reserve <= cost_budget
+
+        if fidelity == 'batch':
+            reps = {}
+            for (mt, mn), binary in table.items():
+                if binary not in reps or mt > reps[binary][0]:
+                    reps[binary] = (mt, mn)
+            q = options.get('batch_size', 16)
+            unit = options.get('batch_unit_cost', 0.6)    # nominal s per batch screen
+            while budget_left(unit * q):
+                groups = {}
+                for point, trial in searcher.ask_many(q):
+                    config = self.convertPointToValues(point)
+                    key = self.getConfigKey({**config, 'DeviceID': device})
+                    if key in db or (cache is not None and key in cache):
+                        if key not in db:
+                            db.CopyEntry(key, cache)
+                        source = 'cache' if key not in {t['key'] for t in trace} else 'repeat'
+                        spent += unit if source == 'cache' else 0.0
+                        searcher.tell_trial(trial, objective_values(db.Speedup(key),
+                                                                    db.EnergyImprov(key)))
+                        trace.append({'step': step, 'key': key, 'source': source, 'class': klass,
+                                      'cost': spent, 'wall': time.perf_counter() - t_start,
+                                      'speedup': db.Speedup(key),
+                                      'energy_gain': db.EnergyImprov(key)})
+                        step += 1
+                        continue
+                    binary = table.get((config['MaxThreads'], config['MinTeams']))
+                    rep = reps.get(binary, (config['MaxThreads'], config['MinTeams']))
+                    groups.setdefault(rep, []).append((point, trial, config, key))
+                for rep, items in groups.items():
+                    results = self.sample_batch(
+                        [dict(MaxThreads=rep[0], MinTeams=rep[1], NumThreads=c['NumThreads'],
+                              NumTeams=c['NumTeams']) for _, _, c, _ in items], deviceID=device)
+                    for (point, trial, config, key), (valid, dur) in zip(items, results):
+                        db.Add(key, [None], [[]], [[dur]] if valid else [[]],
+                               [[float('nan')]], [None], [None], valid)
+                        db.Data[key]['fidelity'] = 'batch'
+                        db.Update()
+                        spent += unit
+                        values = objective_values(db.Speedup(key), db.EnergyImprov(key))
+                        searcher.tell_trial(trial, values)
+                        trace.append({'step': step, 'key': key, 'source': 'batch',
+                                      'class': klass, 'cost': spent,
+                                      'wall': time.perf_counter() - t_start,
+                                      'speedup': db.Speedup(key),
+                                      'energy_gain': db.EnergyImprov(key)})
+                        step += 1
+                print(f'[{algorithm}/s{seed}] {step} screened, wall '
+                      f'{time.perf_counter() - t_start:.0f}s, best batch speedup '
+                      f'{max([t["speedup"] for t in trace] or [0]):.4f}', flush=True)
+
+        while fidelity != 'batch' and ((step < budget) if fidelity == 'full'
+                                       else budget_left(self.COST_SCREEN)):
             point = searcher.ask()
             config = self.convertPointToValues(point)
             config['DeviceID'] = device
@@ -739,14 +824,15 @@ class Kernel:
                 'sm__warps_active.avg.pct_of_peak_sustained_active', float('nan'))
             searcher.tell(point, values)
             trace.append({'step': step, 'key': key, 'source': source, 'class': klass,
-                          'cost': spent, 'speedup': db.Speedup(key),
+                          'cost': spent, 'wall': time.perf_counter() - t_start,
+                          'speedup': db.Speedup(key),
                           'energy_gain': db.EnergyImprov(key)})
             print(f'[{algorithm}/{"+".join(objectives)}/s{seed}] {step + 1} cost={spent:.0f}s '
                   f'{source:8s} {key} speedup={trace[-1]["speedup"]:.4f}', flush=True)
             step += 1
 
         shipped = None
-        if fidelity == 'mf':
+        if fidelity in ('mf', 'batch'):
             # Promote the best screens to a full measurement and ship among them.
             rows = [(db.Speedup(k), k) for k in {t['key'] for t in trace}
                     if db.Data[k]['valid']]
@@ -761,7 +847,8 @@ class Kernel:
                     db.Update()
                 spent += self.COST_PROMOTE
                 trace.append({'step': step, 'key': k, 'source': 'promote', 'class': klass,
-                              'cost': spent, 'speedup': db.Speedup(k),
+                              'cost': spent, 'wall': time.perf_counter() - t_start,
+                              'speedup': db.Speedup(k),
                               'energy_gain': db.EnergyImprov(k)})
                 step += 1
             promoted = [k for k in db.Data if db.Data[k].get('fidelity') == 'promoted']
@@ -773,6 +860,79 @@ class Kernel:
         pd.DataFrame(trace).to_csv(
             f'{self.dbDir}/trace_{self.HashName}.csv', index=False)
         return trace
+
+    # Re-warm time (ms) before each configuration after the first one in a
+    # batch replay; the GPU is already at a steady clock.
+    BatchRewarmMs = int(os.environ.get('RR_BATCH_REWARM_MS', 100))
+
+    def sample_batch(self, configs, deviceID=0):
+        """Time several launch configurations of one binary in one replay process.
+
+        `configs` share MaxThreads/MinTeams (one compiled image) and differ in
+        NumThreads/NumTeams. The replay tool (--batch) restores the recorded
+        inputs on the device before each configuration, so every
+        configuration starts from the recorded state. Returns, in order, a
+        list of (valid, duration_seconds). A configuration that makes the
+        replay fail is marked invalid and the rest continue in a new process.
+        Batch timings are taken under sustained load, so on short,
+        power-hungry kernels they run ~1% slower than single-process timings
+        (T4 power cap); use them to rank, not to ship.
+        """
+        lb = {k: configs[0][k] for k in ('MaxThreads', 'MinTeams')
+              if configs[0].get(k) is not None}
+        device_handle = self._nvml_handle(deviceID)
+        stats = self.Profiler.deviceCompile(self.original, self.Name, self.HashName, **lb)
+        regs = stats[self.Name][0] if stats and self.Name in stats else None
+        out = [None] * len(configs)
+        todo = []
+        for i, c in enumerate(configs):
+            nt = c.get('NumThreads')
+            if regs is not None and nt is not None and regs * nt > self.Profiler.MaxRegBlock:
+                out[i] = (False, None)
+            else:
+                todo.append(i)
+        with open(f'{self.HashName}.json') as fd:
+            mem_bytes = json.load(fd).get('DeviceMemorySize', 0)
+        devmem = max(4, int(math.ceil(2 * mem_bytes / 2 ** 30)) + 1)
+        env = (self.Replayer.env(profile_metrics=False, profile_activities=False,
+                                 profile_timing=True, energy=False)
+               + f' LIBOMPTARGET_RR_DEVICE_RESTORE=1 LIBOMPTARGET_RR_DEVMEM_SIZE={devmem}'
+               f' LIBOMPTARGET_RR_TIMING_REWARM_MS={self.BatchRewarmMs}')
+        batch_file = f'{self.HashName}.batch.txt'
+        contended_retries = 0
+        while todo:
+            with open(batch_file, 'w') as fd:
+                for i in todo:
+                    fd.write(f"{int(configs[i].get('NumTeams') or 0)} "
+                             f"{int(configs[i].get('NumThreads') or 0)}\n")
+            self._wait_for_exclusive_gpu(device_handle)
+            ret, stdout, stderr = execute_command(
+                f'{env} timeout 900s {self.Replayer.cmd} --batch {batch_file} {self.HashName}.json',
+                capture_output=True, cwd=os.getcwd(), shell=True, ContinueOnFailure=True)
+            if self._foreign_gpu_processes(device_handle) and \
+                    contended_retries < self.ContendedRetries:
+                contended_retries += 1
+                print('GPU shared during batch replay; repeating it')
+                continue
+            times, current = {}, None
+            for line in (stdout or '').splitlines():
+                m = re.match(r'\|\|ReplayConfig\|\| index: (\d+)', line)
+                if m:
+                    current = int(m.group(1))
+                    continue
+                m = re.match(r'\|\|ReplayTiming\|\| duration_seconds: (\S+)', line)
+                if m and current is not None:
+                    times[current] = float(m.group(1))
+            for pos, i in enumerate(todo):
+                if pos in times:
+                    out[i] = (True, times[pos])
+            missing = [pos for pos in range(len(todo)) if pos not in times]
+            if not missing:
+                break
+            failed = missing[0]            # the configuration that stopped the process
+            out[todo[failed]] = (False, None)
+            todo = todo[failed + 1:]
+        return out
 
     # returns isValid, SStats, DStats, execTime, execEnergy, gLoads, gStores
     def sample(self, **kwargs):

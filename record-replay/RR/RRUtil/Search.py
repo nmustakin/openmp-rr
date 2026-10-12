@@ -47,14 +47,18 @@ class BOSearcher:
 class OptunaSearcher:
     """Optuna TPE / random / multi-objective TPE via the ask-tell interface."""
 
-    def __init__(self, bounds, seed, n_init, objectives, kind, initial_points=None):
+    def __init__(self, bounds, seed, n_init, objectives, kind, initial_points=None,
+                 constant_liar=False):
         import optuna
         optuna.logging.set_verbosity(optuna.logging.WARNING)
         if kind == 'random':
             sampler = optuna.samplers.RandomSampler(seed=seed)
         else:
+            # constant_liar: proposals asked before earlier ones are told
+            # (batch evaluation) avoid the pending points.
             sampler = optuna.samplers.TPESampler(seed=seed, n_startup_trials=n_init,
-                                                 multivariate=True)
+                                                 multivariate=True,
+                                                 constant_liar=constant_liar)
         self.bounds, self.objectives = bounds, objectives
         self.study = optuna.create_study(directions=['maximize'] * len(objectives),
                                          sampler=sampler)
@@ -73,6 +77,19 @@ class OptunaSearcher:
     def tell(self, point, values):
         result = [values[o] for o in self.objectives]
         self.study.tell(self.trial, result[0] if len(result) == 1 else result)
+
+    def ask_many(self, n):
+        """Propose n points before any is told (batch evaluation)."""
+        out = []
+        for _ in range(n):
+            trial = self.study.ask()
+            out.append(({k: trial.suggest_float(k, b[0], b[1]) for k, b in self.bounds.items()},
+                        trial))
+        return out
+
+    def tell_trial(self, trial, values):
+        result = [values[o] for o in self.objectives]
+        self.study.tell(trial, result[0] if len(result) == 1 else result)
 
 
 # T4 / sm_75 limits for compile-time features.
@@ -324,6 +341,27 @@ def build_portfolio(pool, target_kid, klass, trip_count, size=10, per_kernel=3):
     return points
 
 
+def point_to_config(point, trip_count, warp=32, max_block=1024, threads_smp=1024):
+    """Device.getLaunchBounds for the T4 limits (MaxThreads, MinTeams, NumThreads, NumTeams)."""
+    mt = int(math.ceil(max(point['MaxThreads'], 1e-12) * (max_block / warp)) * warp)
+    max_blocks = min(32, int(threads_smp // mt))
+    mn = max(1, int(math.ceil(max(point['MinTeams'], 1e-12) * max_blocks)))
+    nt = min(mt, int(math.ceil(max(point['NumThreads'], 1e-12) * mt / warp) * warp))
+    teams = int(math.ceil(trip_count / nt * max(point['NumTeams'], 1e-12)))
+    return dict(MaxThreads=mt, MinTeams=mn, NumThreads=nt, NumTeams=teams)
+
+
+def prior_density(P, Z, bandwidth=0.08, floor=0.1):
+    """Gaussian KDE over prior points P (prior_coords space), mixed with a uniform floor,
+    normalised to a maximum of 1 over the evaluated set Z."""
+    import numpy as np
+    if P is None or len(P) == 0:
+        return np.ones(len(Z))
+    d = ((Z[:, None, :] - P[None]) ** 2).sum(-1)
+    dens = np.exp(-d / (2 * bandwidth ** 2)).mean(1)
+    return floor + (1 - floor) * dens / max(dens.max(), 1e-12)
+
+
 TRANSFER_FEATURES = ['lnt', 'lfrac', 'regs', 'lspill', 'occ', 'lwaves', 'tail',
                      'is_locality', 'is_register', 'is_compute']
 
@@ -352,7 +390,7 @@ class TransferModelSearcher:
     """
 
     def __init__(self, bounds, seed, objectives, pool, target_kid, klass, table, trip_count,
-                 own_weight=20.0, n_frac=28):
+                 own_weight=20.0, n_frac=28, initial_points=None, prior_points=None, beta=10.0):
         import numpy as np
         import pandas as pd
         from RRUtil.Search import compile_features
@@ -386,11 +424,41 @@ class TransferModelSearcher:
         self.Xc = transfer_frame(self.cand)
         self.own_X, self.own_y, self.seen = [], [], set()
         self.asked = None
+        self.table = table
+        # Combined mode: evaluate portfolio points first; weight EI by a prior.
+        self.initial = list(initial_points or [])
+        self.beta = beta
+        self.prior_w = None
+        if prior_points:
+            order = ['MaxThreads', 'MinTeams', 'NumThreads', 'NumTeams']
+            P = prior_coords(np.array([[p[k] for k in order] for p in prior_points]))
+            U = np.array([[config_to_point(dict(MaxThreads=r.MaxThreads, MinTeams=r.MinTeams,
+                                                NumThreads=r.NumThreads, NumTeams=r.NumTeams),
+                                           trip_count)[k] for k in order]
+                          for r in self.cand.itertuples()])
+            self.prior_w = prior_density(P, prior_coords(U))
+
+    def _row_for(self, point):
+        from RRUtil.Search import compile_features
+        cfg = point_to_config(point, self.trip)
+        f, _ = compile_features(cfg, self.table, self.trip)
+        if f is None:
+            return None
+        return self.pd.Series(dict(cfg, teams_frac=cfg['NumTeams'] * cfg['NumThreads'] / self.trip,
+                                   regs=f[4], spill=f[5], occ=f[6], waves=2 ** f[7], tail=f[8],
+                                   klass=self.klass,
+                                   canon=(f[4], f[5], cfg['NumThreads'], cfg['NumTeams'])))
 
     def ask(self):
         from sklearn.ensemble import ExtraTreesRegressor
         from scipy.stats import norm
         np = self.np
+        while self.initial:
+            point = self.initial.pop(0)
+            row = self._row_for(point)
+            if row is not None and row.canon not in self.seen:
+                self.asked = row
+                return point
         X = np.vstack([self.X0] + ([np.array(self.own_X)] if self.own_X else []))
         y = np.r_[self.y0, np.array(self.own_y)] if self.own_y else self.y0
         w = np.r_[np.ones(len(self.y0)), np.full(len(self.own_y), self.own_weight)]
@@ -403,6 +471,8 @@ class TransferModelSearcher:
         best = max(self.own_y) if self.own_y else 0.0     # baseline = log(1)
         z = (mu - best) / sd
         ei = (mu - best) * norm.cdf(z) + sd * norm.pdf(z)
+        if self.prior_w is not None:
+            ei = ei * self.prior_w[idx] ** (self.beta / max(1, len(self.own_y)))
         i = idx[int(np.argmax(ei))]
         r = self.cand.iloc[i]
         self.asked = r
@@ -513,7 +583,9 @@ def make_searcher(algorithm, bounds, seed, n_init, objectives, featurize=None,
     if algorithm == 'transfer-model':
         return TransferModelSearcher(bounds, seed, objectives, options['pool'],
                                      options['target_kid'], options['klass'],
-                                     options['table'], options['trip_count'])
+                                     options['table'], options['trip_count'],
+                                     initial_points=options.get('initial_points'),
+                                     prior_points=options.get('prior_points'))
     if algorithm == 'bo':
         return BOSearcher(bounds, seed, n_init, objectives)
     if algorithm in ('tpe', 'random', 'motpe'):
@@ -521,5 +593,6 @@ def make_searcher(algorithm, bounds, seed, n_init, objectives, featurize=None,
             assert len(objectives) > 1, 'motpe needs several objectives'
         return OptunaSearcher(bounds, seed, n_init, objectives,
                               'random' if algorithm == 'random' else 'tpe',
-                              initial_points=options.get('initial_points'))
+                              initial_points=options.get('initial_points'),
+                              constant_liar=options.get('constant_liar', False))
     raise ValueError(f'unknown search algorithm {algorithm}')

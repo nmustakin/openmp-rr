@@ -49,6 +49,12 @@ static cl::opt<unsigned> NumThreadsOpt("num-threads",
                                        cl::desc("Set the number of threads."),
                                        cl::init(0), cl::cat(ReplayOptions));
 
+static cl::opt<std::string> BatchOpt(
+    "batch",
+    cl::desc("File with one 'num-teams num-threads' pair per line; replay every "
+             "configuration in this process (inputs restored before each)."),
+    cl::init(""), cl::cat(ReplayOptions));
+
 static cl::opt<int32_t> DeviceIdOpt("device-id", cl::desc("Set the device id."),
                                     cl::init(-1), cl::cat(ReplayOptions));
 
@@ -212,13 +218,42 @@ int main(int argc, char **argv) {
     report_fatal_error("Error reading the kernel input device memory.");
 
 
-  __tgt_target_kernel_replay(
-      /* Loc */ nullptr, DeviceId, KernelEntry.addr,
-      (void *)DeviceMemoryMB.get()->getBuffer().data(),
-      DeviceMemoryMB.get()->getBufferSize(), TgtArgs.data(),
-      TgtArgOffsets.data(), NumArgs.value(), NumTeams, NumThreads,
-      LoopTripCount.value(), GlobalsMB.get()->getBufferStart(),
-      GlobalsMB.get()->getBufferSize());
+  // Launch configurations: the command-line pair, or every pair in --batch.
+  SmallVector<std::pair<int32_t, int32_t>> Configs;
+  if (!BatchOpt.empty()) {
+    ErrorOr<std::unique_ptr<MemoryBuffer>> BatchMB =
+        MemoryBuffer::getFile(BatchOpt, /* isText */ true);
+    if (!BatchMB)
+      report_fatal_error("Error reading the --batch file.");
+    SmallVector<StringRef> Lines;
+    BatchMB.get()->getBuffer().split(Lines, '\n', -1, false);
+    for (StringRef Line : Lines) {
+      SmallVector<StringRef> Fields;
+      Line.trim().split(Fields, ' ', -1, false);
+      int32_t Teams = 0, Threads = 0;
+      if (Fields.size() == 2 && !Fields[0].getAsInteger(10, Teams) &&
+          !Fields[1].getAsInteger(10, Threads))
+        Configs.push_back({Teams, Threads});
+    }
+  } else {
+    Configs.push_back({NumTeams, NumThreads});
+  }
+
+  for (size_t I = 0; I < Configs.size(); ++I) {
+    if (!BatchOpt.empty()) {
+      outs() << "||ReplayConfig|| index: " << I << " num_teams: " << Configs[I].first
+             << " num_threads: " << Configs[I].second << "\n";
+      outs().flush();
+    }
+    __tgt_target_kernel_replay(
+        /* Loc */ nullptr, DeviceId, KernelEntry.addr,
+        (void *)DeviceMemoryMB.get()->getBuffer().data(),
+        DeviceMemoryMB.get()->getBufferSize(), TgtArgs.data(),
+        TgtArgOffsets.data(), NumArgs.value(), Configs[I].first,
+        Configs[I].second, LoopTripCount.value(),
+        GlobalsMB.get()->getBufferStart(), GlobalsMB.get()->getBufferSize());
+    fflush(stdout);
+  }
 
   __tgt_unregister_lib(&Desc);
 

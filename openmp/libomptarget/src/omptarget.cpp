@@ -1680,9 +1680,40 @@ int target_replay(ident_t *Loc, DeviceTy &Device, void *HostPtr,
     Device.initializeRecordedGlobals(GlobalsEncoding, GlobalsEncodingSize);
 
   if (DeviceMemorySize) {
-    void *TgtPtr = Device.allocData(DeviceMemorySize, /* HstPtr */ nullptr,
-                                    TARGET_ALLOC_DEFAULT);
-    Device.submitData(TgtPtr, DeviceMemory, DeviceMemorySize, AsyncInfo);
+    // Allocate the recorded memory region once per process. A batch replay
+    // calls this function once per launch configuration; re-copying the
+    // pristine recording into the same region restores the kernel inputs, and
+    // the recorded pointer arguments stay valid (a second allocation from the
+    // record/replay bump allocator would land at a different address).
+    // After the first host-to-device copy, a pristine device-side backup is
+    // kept (if the replay memory reservation has room for it), and later
+    // configurations restore from it with a device-to-device copy, which is
+    // much faster than re-sending the recording from host memory.
+    static void *ReplayTgtPtr = nullptr;
+    static void *ReplayBackupPtr = nullptr;
+    static int64_t ReplayTgtSize = 0;
+    if (!ReplayTgtPtr || ReplayTgtSize < DeviceMemorySize) {
+      ReplayTgtPtr = Device.allocData(DeviceMemorySize, /* HstPtr */ nullptr,
+                                      TARGET_ALLOC_DEFAULT);
+      ReplayTgtSize = DeviceMemorySize;
+      ReplayBackupPtr = nullptr;
+      Device.submitData(ReplayTgtPtr, DeviceMemory, DeviceMemorySize, AsyncInfo);
+      const char *Restore = getenv("LIBOMPTARGET_RR_DEVICE_RESTORE");
+      if (Restore && std::string(Restore) != "0" && Device.isDataExchangable(Device)) {
+        ReplayBackupPtr = Device.allocData(DeviceMemorySize, /* HstPtr */ nullptr,
+                                           TARGET_ALLOC_DEFAULT);
+        if (ReplayBackupPtr &&
+            Device.dataExchange(ReplayTgtPtr, Device, ReplayBackupPtr,
+                                DeviceMemorySize, AsyncInfo) != OFFLOAD_SUCCESS)
+          ReplayBackupPtr = nullptr;
+      }
+    } else if (ReplayBackupPtr) {
+      if (Device.dataExchange(ReplayBackupPtr, Device, ReplayTgtPtr,
+                              DeviceMemorySize, AsyncInfo) != OFFLOAD_SUCCESS)
+        Device.submitData(ReplayTgtPtr, DeviceMemory, DeviceMemorySize, AsyncInfo);
+    } else {
+      Device.submitData(ReplayTgtPtr, DeviceMemory, DeviceMemorySize, AsyncInfo);
+    }
   }
 
   int Ret =
