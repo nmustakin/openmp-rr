@@ -54,9 +54,12 @@ the large gains and predict when a kernel has nothing to gain. A pipeline that
 classifies each kernel's bottleneck from baseline metrics and chooses the
 search strategy accordingly matches or beats every fixed strategy, measures
 30\% fewer configurations on LULESH, and improves on Bayesian optimization by
-1.3\% on held-out miniFE kernels. Finally, we quantify further avenues for
-searching faster, including transfer of good configurations across kernels,
-which roughly doubles the progress of the first five evaluations.
+1.3\% on held-out miniFE kernels. Finally, we test four avenues for searching
+faster online. Multi-fidelity screening, a warm start from other kernels'
+best configurations, a cost model transferred across kernels, and a
+prior-guided acquisition each reach good configurations much earlier, for
+example 0.74 instead of 0.42 of the attainable gain within the cost of ten
+full evaluations, and ship 1.0\% to 1.9\% faster configurations.
 \end{abstract}
 
 \tableofcontents
@@ -935,6 +938,96 @@ once~\cite{ginsbourger2010kriging}. Large language models have been used to
 propose configurations and priors, with a vendor report of 9.8\x{} fewer
 configurations for comparable results on Helion kernels~\cite{helion2026llm}.
 
+
+\subsection{Online evaluation of four avenues}
+\label{sec:avenues}
+We implemented the four most promising avenues and tested each one online
+against its natural baseline on 13 kernels, the six LULESH kernels with a
+gain (l333, l649, l844, l1029, l1080, l1201) and all seven miniFE kernels,
+with three seeds each. The compute-saturated kernels were excluded, because
+they have nothing to gain. Every phase re-measured the shipped configurations
+of the avenue and of its baseline together with the baseline configuration in
+five randomized rounds. Runs of a kernel shared its measurement cache, and the
+two short miniFE kernels l169 and l254 used a fresh cache when they moved to
+another GPU, because their timings can differ by 2.5\% between GPUs. To give
+the cheaper evaluations of multi-fidelity search a fair comparison, we measure
+progress against a nominal cost (14.6~s for a full evaluation, 4.4~s for a
+screening evaluation, and 9.85~s for promoting a screened configuration to a
+full evaluation, Figure~\ref{fig:cost}), and we charge cache hits their
+nominal cost.
+
+The four avenues were as follows. First, \emph{multi-fidelity screening}
+(\code{tpe-mf}) evaluates every TPE proposal with one timing process and no
+energy window or metrics replay, within the nominal cost of 60 full
+evaluations, and then fully measures the five best screened configurations
+and ships the best of them. A run thus screened 187 configurations on
+average. Second, the \emph{portfolio warm start} (\code{tpe-portfolio})
+replaces TPE's first ten proposals with the best configurations of other
+kernels, taking kernels of the same class first and mapping each
+configuration to the target trip count through its teams fraction. Third,
+the \emph{transfer cost model} (\code{transfer-model}) fits an ExtraTrees
+model on the measurements of all other kernels plus the target kernel's own,
+which receive 20 times the weight, over features that do not depend on the
+kernel (threads, teams fraction, registers, spills, theoretical occupancy,
+waves, tail efficiency, and bottleneck class). It ranks a candidate set with
+one launch bound per distinct binary, every warp multiple of threads, and 28
+teams fractions, never proposes the same binary and launch twice, and uses
+expected improvement from the first proposal without random initial samples.
+Fourth, the \emph{prior-guided search} (\code{trees-prior}) multiplies the
+expected improvement of the \code{trees-config} surrogate by a prior raised to
+the power $\beta/n$, as in $\pi$BO~\cite{hvarfner2022pibo}, with $\beta = 10$
+and $n$ the number of observations. The prior is a Gaussian kernel density
+estimate over the best 5\% of configurations of other kernels of the same
+class, mixed with a uniform density of weight 0.1, and the initial samples are
+drawn from it. All transfers leave the target kernel out.
+
+Table~\ref{tab:avenues} and Figure~\ref{fig:avenues} show the results. Every
+avenue found good configurations much earlier than its baseline, and every
+avenue shipped faster configurations on average. The portfolio and the
+transfer cost model improved the shipped speedup by 1.2\% and 1.9\%, and
+their confidence intervals exclude a ratio of 1. Multi-fidelity screening
+reached 0.74 of the attainable gain within the cost of ten full evaluations,
+against 0.42 for TPE, but on the 0.95~ms miniFE kernel l254 it shipped a
+configuration that validated at 0.969\x{}, because a single timing process
+of a short kernel is noisier than the median of two. The prior-guided search
+gave the most lasting improvement in progress, 0.92 against 0.88 of the
+attainable gain after 60 evaluations. The early advantage of the portfolio
+and of the transfer cost model narrowed by 60 evaluations, which suggests that
+they help most when the budget is small.
+
+\begin{table}[t]
+\centering
+\caption{Online evaluation of four avenues on 13 kernels (three seeds each).
+The shipped speedup is the geometric mean ratio of the validated speedup of
+the avenue's shipped configuration to that of its baseline, with a 95\%
+kernel-clustered bootstrap CI. Progress is the share of the best known log
+speedup found within a nominal cost of 10 and 60 full evaluations.}
+\label{tab:avenues}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llrrr}
+\toprule
+Avenue & Baseline & Shipped ratio (95\% CI) & Better / worse & Progress at 10 / 60 \\
+\midrule
+Multi-fidelity screening & TPE & 1.014 [0.998, 1.031] & 5 / 1 & 0.74 / 0.91 (0.42 / 0.87) \\
+Portfolio warm start & TPE & 1.012 [1.002, 1.023] & 4 / 1 & 0.59 / 0.86 (0.44 / 0.80) \\
+Transfer cost model & TPE & 1.019 [1.003, 1.044] & 5 / 1 & 0.70 / 0.82 (0.50 / 0.80) \\
+Transfer cost model & \code{trees-meta} & 1.009 [0.991, 1.030] & 3 / 3 & 0.70 / 0.82 (0.49 / 0.83) \\
+Prior-guided search & \code{trees-config} & 1.010 [0.999, 1.021] & 6 / 2 & 0.71 / 0.92 (0.50 / 0.88) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{avenues}
+\caption{Share of the best known log speedup found within a nominal cost,
+expressed in full evaluations, for each avenue and its baseline, averaged over
+13 kernels and three seeds. Each panel uses its own phase's measurements, so
+the baselines differ slightly between panels.}
+\label{fig:avenues}
+\end{figure}
+
 %=============================================================================
 \section{Discussion and recommendations}
 \label{sec:discussion}
@@ -959,9 +1052,15 @@ benefit per unit of effort.
 \item Classify the kernel from warm baseline metrics, stop early on
   compute-saturated kernels, and choose the surrogate features by class.
 \item Seed the search with a portfolio of configurations transferred from
-  similar kernels instead of random initial samples.
-\item Reparameterize the launch bounds as a categorical binary class and
-  screen candidates with a single short timing replay.
+  similar kernels, or rank candidates with a cost model transferred across
+  kernels, instead of random initial samples (Section~\ref{sec:avenues}).
+\item Screen candidates with a single short timing replay and fully measure
+  only the best few, keeping the default configuration when a short kernel's
+  promoted winner does not beat it, and reparameterize the launch bounds as a
+  categorical binary class.
+\item Use the best configurations of same-class kernels as a prior for the
+  acquisition function, which kept the largest progress advantage in our
+  tests.
 \item Use MOTPE when energy matters, because it finds the time-energy
   trade-off at no cost in speed.
 \end{enumerate}
@@ -995,7 +1094,8 @@ a \code{RESULTS.md} file: \code{optimizer-study-2026-10-09}
 (Section~\ref{sec:search}), \code{metric-search-2026-10-10}
 (Sections~\ref{sec:metrics} and~\ref{sec:targets}),
 \code{adaptive-2026-10-10} (Section~\ref{sec:adaptive}), and
-\code{search-efficiency-2026-10-10} (Section~\ref{sec:efficiency}).
+\code{search-efficiency-2026-10-10} (Section~\ref{sec:efficiency}), and
+\code{avenues-online-2026-10-11} (Section~\ref{sec:avenues}).
 Optuna~3.6.1 is not part of the container, and the studies installed it in an
 experiment-local directory on \code{PYTHONPATH}. Table~\ref{tab:env} lists the
 environment variables that control the new behavior.

@@ -351,9 +351,63 @@ def fig_initial():
     save(fig, 'initial_designs')
 
 
+# ---------------------------------------------------------------- 11. online avenues
+def fig_avenues():
+    O = f'{X}/avenues-online-2026-10-11'
+    A = f'{X}/adaptive-2026-10-10'
+    kernels = [f'{S}/runs/l{l}' for l in [649, 1201, 844, 333, 1080, 1029]] + \
+              [f'{A}/runs-minife/l{l}' for l in [521, 290, 205, 210, 157, 254, 169]]
+    full = 0.4 + 2 * 4.35 + 5.5
+    phases = [('Multi-fidelity vs TPE', 'tpe-mf', 'tpe-speedup'),
+              ('Portfolio vs TPE', 'tpe-portfolio', 'tpe-speedup'),
+              ('Transfer model vs TPE', 'transfer-model', 'tpe-speedup'),
+              ('Prior vs trees-config', 'trees-prior', 'trees-config')]
+    budgets = np.arange(1, 61)
+    fig, axes = plt.subplots(1, 4, figsize=(TWO, 1.9), sharey=True)
+    for ax, (title, new, base) in zip(axes, phases):
+        curves = {new: [], base: []}
+        for kd in kernels:
+            per = {}
+            for m in (new, base):
+                dirs = glob.glob(f'{kd}/{m}-s*')
+                alt = f'{O}/runs-minife-p4/{os.path.basename(kd)}'
+                if m in ('trees-prior', 'trees-config') and glob.glob(f'{alt}/{m}-s*'):
+                    dirs = glob.glob(f'{alt}/{m}-s*')
+                for d in dirs:
+                    tr = glob.glob(f'{d}/trace_*.csv')
+                    if not tr:
+                        continue
+                    t = pd.read_csv(tr[0])
+                    if 'cost' not in t:
+                        t['cost'] = np.cumsum(np.where(t.source == 'repeat', 0, full))
+                    t = t[t.source != 'promote']
+                    best = np.maximum.accumulate(np.where(t.speedup > 0.05, t.speedup, 0))
+                    per.setdefault(m, []).append((t.cost.values, best))
+            if not per.get(new) or not per.get(base):
+                continue
+            bk = max(b.max() for m in per for _, b in per[m])
+            if bk <= 1.01:
+                continue
+            for m in per:
+                for cost, best in per[m]:
+                    idx = np.searchsorted(cost, budgets * full, side='right') - 1
+                    got = np.where(idx >= 0, best[np.clip(idx, 0, None)], 1.0)
+                    curves[m].append(np.log(np.maximum(got, 1e-9)) / np.log(bk))
+        for i, (m, label) in enumerate([(base, 'Baseline'), (new, 'Avenue')]):
+            c = np.clip(np.mean(curves[m], axis=0), 0, 1)
+            ax.plot(budgets, c, color=SLOT[i], marker=MARK[i], markevery=10, markersize=3.5,
+                    markeredgecolor=SURF, markeredgewidth=0.5, label=label)
+        ax.set_title(title, fontsize=7.5)
+        ax.set_xlabel('Cost (full evaluations)', fontsize=7)
+        ax.set_xlim(1, 60); ax.set_ylim(0, 1)
+        ax.legend(loc='lower right', fontsize=6)
+    axes[0].set_ylabel('Share of best known\nlog speedup')
+    save(fig, 'avenues')
+
+
 if __name__ == '__main__':
     for f in [fig_clock_ramp, fig_winners_curse, fig_measurement, fig_anytime, fig_time_energy,
-              fig_dram, fig_classes, fig_meta_effect, fig_cost, fig_initial]:
+              fig_dram, fig_classes, fig_meta_effect, fig_cost, fig_initial, fig_avenues]:
         try:
             f()
         except Exception as e:

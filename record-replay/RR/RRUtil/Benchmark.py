@@ -93,7 +93,7 @@ class Kernel:
             return cmd + ' {kernel_name}.json'
 
         def env(self, profile_metrics=True, profile_activities=True,
-                profile_timing=False):
+                profile_timing=False, energy=True):
             env_vars = dict(self.envVars)
             env_vars['LIBOMPTARGET_RR_PROFILE_METRICS'] = int(profile_metrics)
             env_vars['LIBOMPTARGET_RR_PROFILE_ACTIVITIES'] = int(profile_activities)
@@ -106,7 +106,7 @@ class Kernel:
                 env_vars['LIBOMPTARGET_RR_TIMING_WARMUP'] = Kernel.TimingWarmup
                 env_vars['LIBOMPTARGET_RR_TIMING_WARMUP_MS'] = Kernel.TimingWarmupMs
                 env_vars['LIBOMPTARGET_RR_TIMING_REPEATS'] = Kernel.TimingRepeats
-                env_vars['LIBOMPTARGET_RR_ENERGY_MIN_MS'] = Kernel.EnergyMinMs
+                env_vars['LIBOMPTARGET_RR_ENERGY_MIN_MS'] = Kernel.EnergyMinMs if energy else 0
             return ' '.join([f'{k}={v}' for k,v in env_vars.items()])
 
     def __init__(self, Device, name, hashname, dbDir, recorded=True):
@@ -550,26 +550,45 @@ class Kernel:
 
         optimize(self, **kwargs)
 
+    # Nominal cost (s) of one evaluation, measured on T4 (experiment-archives/
+    # search-efficiency-2026-10-10/cost_breakdown.log): compile 0.4 s, a timing
+    # process ~4.0 s without and ~4.35 s with the energy window, a warm metrics
+    # replay ~5.5 s. Used to give multi-fidelity searches an equal budget.
+    COST_SCREEN = 0.4 + 4.0
+    COST_FULL = 0.4 + 2 * 4.35 + 5.5
+    COST_PROMOTE = 4.35 + 5.5
+
     def Search(self, algorithm, objectives, budget, initSamples, seed, cacheDB=None,
-               device=0, compileTable=None, **kwargs):
+               device=0, compileTable=None, options=None, **kwargs):
         """Search with a pluggable strategy (RRUtil.Search).
 
         `budget` counts suggestions, as Kernel.BO does (a suggestion that
         rounds to an already-evaluated config still consumes budget).
         `cacheDB` is a DB path shared by runs on the same kernel and GPU: a
         config measured by an earlier run is reused instead of re-measured.
-        Results go to the DB named by getDBName under self.dbDir.
+        Results go to the DB named by getDBName under self.dbDir; the shipped
+        configuration is recorded in its metadata ('shipped').
 
-        algorithm='adaptive' classifies the kernel from its baseline metrics
-        (Search.classify_bottleneck) and then searches the speedup objective
-        with the strategy that suited that class:
-          compute  -> tpe, budget cut to SaturatedBudget
-          register -> trees-meta (compile-time features) steering by
-                      speedup mixed with spill loads and occupancy
-          other    -> tpe
+        Strategies beyond the plain searchers:
+          adaptive       classify the kernel from baseline metrics, then
+                         compute -> tpe with a cut budget, register ->
+                         trees-meta steering by speedup + spills/occupancy,
+                         other -> tpe
+          tpe-mf         multi-fidelity tpe: screen every proposal with one
+                         timing process (no metrics), within a nominal cost
+                         budget of `budget` full evaluations, then fully measure
+                         the `promote` best screens and ship among them
+          tpe-portfolio  tpe whose first proposals are the best configs of
+                         other kernels (options['pool'], leave-one-out)
+          trees-prior    trees-config with a piBO-style prior from the top
+                         configs of other same-class kernels
+          transfer-model cost model trained on other kernels plus this one,
+                         ranking a deduplicated candidate set
         """
         from RRUtil.Search import (make_searcher, objective_values, build_compile_table,
-                                   compile_features, classify_bottleneck)
+                                   compile_features, classify_bottleneck, build_portfolio,
+                                   config_to_point)
+        options = dict(options or {})
         pBounds = self.getBounds(**kwargs)
         db = DB(self.getDBName(**kwargs), self.getDefaultKey())
         db.setMeasurementSchema(self.MeasurementSchema)
@@ -578,8 +597,8 @@ class Kernel:
             cache = DB(cacheDB, self.getDefaultKey())
             cache.setMeasurementSchema(self.MeasurementSchema)
 
-        def measure(config):
-            return self.sample(Tries=self.TimingTries, **config)
+        def measure(config, screen=False):
+            return self.sample(Tries=self.TimingTries, Screen=screen, **config)
 
         if self.getDefaultKey() not in db:
             Valid, SStats, DStats, Duration, Energy, GLoads, GStores = measure({})
@@ -589,8 +608,8 @@ class Kernel:
                 db.SetMetrics(self.getDefaultKey(), getattr(self, 'LastMetrics', {}))
         base_metrics = db.Data.get(self.getDefaultKey(), {}).get('metrics', {})
 
-        strategy, target, klass = algorithm, 'objective', None
-        if algorithm == 'adaptive':
+        klass = None
+        if algorithm in ('adaptive', 'tpe-portfolio', 'trees-prior', 'transfer-model'):
             # Classify from the median of several baseline metric samples; a
             # single profiled launch can be power-throttled.
             samples = db.Data[self.getDefaultKey()].get('metrics_samples', [base_metrics])
@@ -605,6 +624,10 @@ class Kernel:
             names = set().union(*[m.keys() for m in samples])
             median = {n: float(np.median([m[n] for m in samples if n in m])) for n in names}
             klass = classify_bottleneck(median, self.SaturatedSMPct or 80.0)
+
+        strategy, target, fidelity = algorithm, 'objective', 'full'
+        pool = options.pop('pool', None)
+        if algorithm == 'adaptive':
             if klass == 'register':
                 strategy, target = 'trees-meta', 'register-mix'
             else:
@@ -613,6 +636,26 @@ class Kernel:
                 budget = min(budget, self.SaturatedBudget)
             print(f'Adaptive: kernel classified {klass}; strategy {strategy}, target '
                   f'{target}, budget {budget}', flush=True)
+        elif algorithm == 'tpe-mf':
+            strategy, fidelity = 'tpe', 'mf'
+        elif algorithm == 'tpe-portfolio':
+            strategy = 'tpe'
+            options['initial_points'] = build_portfolio(
+                pool, options['target_kid'], klass, self.getTripCount(),
+                size=options.get('portfolio_size', 10))
+            print(f'Portfolio: {len(options["initial_points"])} points for class {klass}',
+                  flush=True)
+        elif algorithm == 'trees-prior':
+            others = pool[(pool.kid != options['target_kid']) & (pool.klass == klass)]
+            if others.empty:
+                others = pool[pool.kid != options['target_kid']]
+            top = others[others.speedup >= others.groupby('kid').speedup.transform(
+                lambda v: v.quantile(0.95))]
+            options['prior_points'] = [config_to_point(
+                dict(MaxThreads=r.MaxThreads, MinTeams=r.MinTeams, NumThreads=r.NumThreads,
+                     teams_frac=r.teams_frac), self.getTripCount()) for r in top.itertuples()]
+            print(f'Prior: {len(options["prior_points"])} top configs from '
+                  f'{others.kid.nunique()} {klass} kernels', flush=True)
         else:
             sm_pct = base_metrics.get('sm__throughput.avg.pct_of_peak_sustained_elapsed')
             if self.SaturatedSMPct > 0 and sm_pct is not None and sm_pct > self.SaturatedSMPct:
@@ -620,18 +663,20 @@ class Kernel:
                       f'compute-saturated, budget {budget} -> {self.SaturatedBudget}', flush=True)
                 budget = min(budget, self.SaturatedBudget)
         db.setMetadata({'args': {**kwargs, 'algorithm': algorithm, 'strategy': strategy,
-                                 'target': target, 'class': klass, 'objectives': objectives,
-                                 'seed': seed, 'initSamples': initSamples},
+                                 'target': target, 'class': klass, 'fidelity': fidelity,
+                                 'objectives': objectives, 'seed': seed,
+                                 'initSamples': initSamples},
                         'bounds': pBounds, 'totalExperiments': budget})
 
-        featurize = None
-        if strategy == 'trees-config':
+        featurize, table = None, None
+        if strategy in ('trees-meta', 'transfer-model'):
+            table = build_compile_table(
+                self, compileTable or f'{self.dbDir}/compile_table.json')
+        if strategy in ('trees-config', 'trees-prior'):
             def featurize(point):
                 key = self.getConfigKey({**self.convertPointToValues(point), 'DeviceID': device})
                 return [point[k] for k in sorted(point)], False, key
         elif strategy == 'trees-meta':
-            table = build_compile_table(
-                self, compileTable or f'{self.dbDir}/compile_table.json')
             trip_count = self.getTripCount()
 
             def featurize(point):
@@ -639,19 +684,26 @@ class Kernel:
                 key = self.getConfigKey({**config, 'DeviceID': device})
                 f, invalid = compile_features(config, table, trip_count)
                 return f, invalid, key
+        if strategy == 'transfer-model':
+            options.update(pool=pool, klass=klass, table=table, trip_count=self.getTripCount())
         searcher = make_searcher(strategy, pBounds, seed, initSamples, objectives,
-                                 featurize, target)
+                                 featurize, target, options)
         # The register-mix target needs metrics for every observed config, so
         # cached entries measured before metrics were collected are re-measured.
         need_metrics = target != 'objective'
 
-        trace = []
-        for step in range(budget):
+        trace, spent = [], 0.0
+        cost_budget = budget * self.COST_FULL
+        reserve = (options.get('promote', 5) * self.COST_PROMOTE) if fidelity == 'mf' else 0.0
+        step = 0
+        while (step < budget) if fidelity == 'full' else (spent + self.COST_SCREEN + reserve
+                                                            <= cost_budget):
             point = searcher.ask()
             config = self.convertPointToValues(point)
             config['DeviceID'] = device
             key = self.getConfigKey(config)
             source = 'repeat'
+            unit = self.COST_SCREEN if fidelity == 'mf' else self.COST_FULL
             if key not in db:
                 cached = cache is not None and key in cache and (
                     not need_metrics or not cache.Data[key]['valid']
@@ -660,17 +712,23 @@ class Kernel:
                     db.CopyEntry(key, cache)
                     source = 'cache'
                 else:
-                    Valid, SStats, DStats, Duration, Energy, GLoads, GStores = measure(config)
+                    Valid, SStats, DStats, Duration, Energy, GLoads, GStores = measure(
+                        config, screen=fidelity == 'mf')
                     db.Add(key, [SStats], DStats, [Duration], [Energy], [GLoads],
                            [GStores], Valid)
-                    if Valid:
+                    if Valid and fidelity == 'full':
                         db.SetMetrics(key, getattr(self, 'LastMetrics', {}))
-                    if cache is not None:
+                    if fidelity == 'mf':
+                        db.Data[key]['fidelity'] = 'screen'
+                        db.Update()
+                    elif cache is not None:
                         cache.CopyEntry(key, db)
                     source = 'measured'
+                spent += unit          # cache hits are charged their nominal cost
             else:
                 db.Add(key, None, None, None, None, None, None, None)
-            if (self.BaselineEvery > 0 and (step + 1) % self.BaselineEvery == 0):
+            if (self.BaselineEvery > 0 and (step + 1) % self.BaselineEvery == 0
+                    and fidelity == 'full'):
                 BValid, _, _, BDuration, BEnergy, _, _ = measure({})
                 if BValid:
                     db.AddSamples(self.getDefaultKey(), BDuration, BEnergy)
@@ -681,10 +739,37 @@ class Kernel:
                 'sm__warps_active.avg.pct_of_peak_sustained_active', float('nan'))
             searcher.tell(point, values)
             trace.append({'step': step, 'key': key, 'source': source, 'class': klass,
-                          'speedup': db.Speedup(key), 'energy_gain': db.EnergyImprov(key)})
-            print(f'[{algorithm}/{"+".join(objectives)}/s{seed}] {step + 1}/{budget} '
-                  f'{source:8s} {key} speedup={trace[-1]["speedup"]:.4f} '
-                  f'energy_gain={trace[-1]["energy_gain"]:.4f}', flush=True)
+                          'cost': spent, 'speedup': db.Speedup(key),
+                          'energy_gain': db.EnergyImprov(key)})
+            print(f'[{algorithm}/{"+".join(objectives)}/s{seed}] {step + 1} cost={spent:.0f}s '
+                  f'{source:8s} {key} speedup={trace[-1]["speedup"]:.4f}', flush=True)
+            step += 1
+
+        shipped = None
+        if fidelity == 'mf':
+            # Promote the best screens to a full measurement and ship among them.
+            rows = [(db.Speedup(k), k) for k in {t['key'] for t in trace}
+                    if db.Data[k]['valid']]
+            for _, k in sorted(rows, reverse=True)[:options.get('promote', 5)]:
+                config = {name: int(v) for name, v in (p.split('=') for p in k.split('-'))
+                          if name != 'DeviceID' and v != 'None'}
+                Valid, _, _, Duration, Energy, _, _ = measure(config)
+                if Valid:
+                    db.AddSamples(k, Duration, Energy)
+                    db.SetMetrics(k, getattr(self, 'LastMetrics', {}))
+                    db.Data[k]['fidelity'] = 'promoted'
+                    db.Update()
+                spent += self.COST_PROMOTE
+                trace.append({'step': step, 'key': k, 'source': 'promote', 'class': klass,
+                              'cost': spent, 'speedup': db.Speedup(k),
+                              'energy_gain': db.EnergyImprov(k)})
+                step += 1
+            promoted = [k for k in db.Data if db.Data[k].get('fidelity') == 'promoted']
+            if promoted:
+                shipped = max(promoted, key=db.Speedup)
+        if shipped is not None:
+            db.MetaData['shipped'] = shipped
+            db.Update()
         pd.DataFrame(trace).to_csv(
             f'{self.dbDir}/trace_{self.HashName}.csv', index=False)
         return trace
@@ -692,6 +777,11 @@ class Kernel:
     # returns isValid, SStats, DStats, execTime, execEnergy, gLoads, gStores
     def sample(self, **kwargs):
         Tries = kwargs.pop('Tries', 5)
+        # Screen: one timing process, no energy window, no metrics replay
+        # (the cheap fidelity of multi-fidelity search).
+        screen = kwargs.pop('Screen', False)
+        if screen:
+            Tries = 1
         deviceID = kwargs.get('deviceID', 0)
         NumThreads = kwargs.get('NumThreads', None)
         NumTeams = kwargs.get('NumTeams', None)
@@ -709,7 +799,8 @@ class Kernel:
 
         DStats = list()
         res, durations, energies, GLoads, GStores = self.execute(
-            NumThreads, NumTeams, device_handle=device_handle, maxIters=Tries)
+            NumThreads, NumTeams, device_handle=device_handle, maxIters=Tries,
+            metrics=not screen, energy=not screen)
         if len(res) == 0:
             return False, None, None, None, None, None, None
 
@@ -759,14 +850,15 @@ class Kernel:
         return True
 
     def execute(self, NumThreads=None, NumTeams=None, maxIters = 9,
-                keepMaxTeam=True, dropSingleTeams=False, device_handle=None):
+                keepMaxTeam=True, dropSingleTeams=False, device_handle=None,
+                metrics=True, energy=True):
         #TODO: replace reference to nvprof in command()
         cmd = self.Replayer.command(NumThreads, NumTeams).format(kernel_name=f'{self.HashName}')
         metrics_env = self.Replayer.env(profile_metrics=True,
                                         profile_activities=True)
         timing_env = self.Replayer.env(profile_metrics=False,
                                        profile_activities=False,
-                                       profile_timing=True)
+                                       profile_timing=True, energy=energy)
 
         #cmd = self.Profiler.command().format(executable=cmd, output=f'{self.HashName}.csv')
         #env += ' ' + self.Profiler.env()
@@ -818,9 +910,12 @@ class Kernel:
             if energy_match is not None:
                 energies.append(float(energy_match.group(1)))
             else:
-                if Kernel.EnergyMinMs > 0:
+                if energy and Kernel.EnergyMinMs > 0:
                     print('Replay did not report kernel energy; recording NaN')
                 energies.append(float('nan'))
+
+        if not metrics:
+            return [[]], durations, energies, [None], [None]
 
         # Metrics are deterministic enough for optimization and expensive to
         # collect, so profile them once after all timing/energy samples.
