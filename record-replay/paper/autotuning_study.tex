@@ -66,7 +66,10 @@ same 300~s budget it ships 6.8\% faster configurations than screening with
 one process per configuration. Adding a convergence-based stop to batch
 screening gives the same quality in about half the time, roughly 2.5 minutes
 per kernel instead of about 15 for Bayesian optimization with 60 full
-evaluations.
+evaluations. Against the workflow we started from, which took about 67
+minutes per kernel and shipped configurations with a true speedup of
+1.39\x{}, the final strategy is about 19\x{} faster end to end and ships
+1.53\x{}.
 \end{abstract}
 
 \tableofcontents
@@ -1155,6 +1158,66 @@ TPE, 60 full evaluations (cached) & 1.469 & about 15 min nominal & 60 \\
 \end{table}
 
 
+\subsection{End-to-end comparison with the original workflow}
+\label{sec:endtoend}
+We compared the final strategy with the workflow this study started from,
+which is Bayesian optimization with GP-UCB, 30 initial and 200 optimizer
+evaluations, and the legacy (v2) measurement. The original LULESH speedup
+search took about 4000~s per kernel (3741~s to 4858~s over its 17 kernels,
+from the times at which each kernel's database was completed), or about 17~s
+per evaluation. The original miniFE searches evaluated 525 configurations per
+kernel, because a second run was appended with the same random seed. To obtain
+the true quality of the original results, we took the configuration that the
+original workflow would ship for each of the five kernels of
+Section~\ref{sec:batch}, namely the one with the best legacy speedup in its
+database, and re-measured it with the v3 method together with the baseline in
+five randomized rounds.
+
+Table~\ref{tab:endtoend} shows the result. The original workflow shipped
+configurations with a true speedup of 1.39\x{} (geometric mean), and its
+reported speedups were wrong in both directions. On l844 it reported
+1.29\x{} for a configuration that is 2\% slower than the baseline, and on
+miniFE l290 it reported 1.15\x{} for a configuration with no gain. The final
+strategy, \code{combined-batch}, shipped configurations with a true speedup of
+1.53\x{} in 210~s per kernel, or about 148~s with two promotions, so it is
+about 19\x{} faster end to end (27\x{} with two promotions) and finds 10\%
+faster configurations. Its best screened configuration first reached the
+original workflow's true speedup after a median of 9~s per kernel, against
+about 4000~s for the original workflow, on four of the five kernels. On l649
+it stayed about 3\% below the original result (2.50\x{} against 2.57\x{}),
+while \code{tpe-batch} reached the original result in two of three runs after
+about 52~s. Most of the quality gain comes from the measurement fixes of
+Section~\ref{sec:measurement}, and most of the time gain comes from batch
+replay and the convergence stop.
+
+\begin{table}[t]
+\centering
+\caption{The original workflow against the final strategy on five kernels.
+All values except the original's claimed speedups (those in its own
+database) are true speedups, re-measured with the v3 method against the
+baseline in five randomized rounds. The original searches evaluated 230 (LULESH) or 525 (miniFE)
+configurations per kernel.}
+\label{tab:endtoend}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{>{\raggedright\arraybackslash}p{4.3cm}rrrr}
+\toprule
+Kernel & Original (claimed) & Original (true) & \code{combined-batch} & \code{tpe-batch} \\
+\midrule
+l649 & 2.203 & 2.573 & 2.499 & 2.589 \\
+l1201 & 1.156 & 1.238 & 1.444 & 1.473 \\
+l844 & 1.289 & 0.984 & 1.232 & 1.236 \\
+miniFE l290 & 1.153 & 1.003 & 1.143 & 1.102 \\
+miniFE l521 & 1.453 & 1.662 & 1.671 & 1.670 \\
+\midrule
+Geometric mean & & 1.392 & 1.534 & 1.540 \\
+Time per kernel & & about 4000~s & 210~s (148~s) & 288~s \\
+Time to reach the original's quality (median) & & about 4000~s & 9~s & 24~s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
 %=============================================================================
 \section{Discussion and recommendations}
 \label{sec:discussion}
@@ -1168,7 +1231,11 @@ Energy as now measured reveals real energy savings that a speed-only search
 misses, and the global load and store request counts explain nothing. The
 answer to the second question is that, once measurements are clean, the
 choice among model-based search algorithms matters little, while the choice
-of model features, initial design, budget, and stopping rule matters more.
+of model features, initial design, budget, stopping rule, and above all the
+cost of each evaluation matters more. Together, these changes made tuning
+about 19\x{} faster than the original workflow and improved the true speedup
+of the shipped configurations from 1.39\x{} to 1.53\x{} on the five kernels
+that we compared end to end (Section~\ref{sec:endtoend}).
 
 We recommend the following changes to the tuner, in order of expected
 benefit per unit of effort.
@@ -1231,7 +1298,9 @@ a \code{RESULTS.md} file: \code{optimizer-study-2026-10-09}
 \code{avenues-online-2026-10-11} (Section~\ref{sec:avenues}), and
 \code{batch-replay-2026-10-11} (Section~\ref{sec:batch}). Batch replay is
 commit \code{b6fd8c751}, and the combined strategy with the convergence stop is
-commit \code{6f5c4c482} (\code{combined-batch-2026-10-12}).
+commit \code{6f5c4c482} (\code{combined-batch-2026-10-12}, which also holds
+the end-to-end comparison in \code{validate\_original.py},
+\code{original-l*.json}, and \code{convergence\_vs\_original.log}).
 Optuna~3.6.1 is not part of the container, and the studies installed it in an
 experiment-local directory on \code{PYTHONPATH}. Table~\ref{tab:env} lists the
 environment variables that control the new behavior.
