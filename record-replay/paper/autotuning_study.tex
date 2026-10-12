@@ -59,7 +59,11 @@ faster online. Multi-fidelity screening, a warm start from other kernels'
 best configurations, a cost model transferred across kernels, and a
 prior-guided acquisition each reach good configurations much earlier, for
 example 0.74 instead of 0.42 of the attainable gain within the cost of ten
-full evaluations, and ship 1.0\% to 1.9\% faster configurations.
+full evaluations, and ship 1.0\% to 1.9\% faster configurations. Replaying many
+configurations in one process, with the inputs restored on the device between
+them, cuts the cost of a configuration from about 4~s to 0.5~s, and with the
+same 300~s budget it ships 6.8\% faster configurations than screening with
+one process per configuration.
 \end{abstract}
 
 \tableofcontents
@@ -837,8 +841,7 @@ about 4.8~s, a third of a full evaluation, and with 0.23\% noise a single
 process ranks candidates reliably. Second, evaluating several runtime
 configurations inside one replay process would pay the floor and the warm-up
 once, which would reduce the cost of a runtime-only variant to roughly one
-second. The replay tool currently accepts one configuration per process, so
-this second change requires extending it.
+second. Section~\ref{sec:batch} implements and evaluates this change.
 
 
 \begin{figure}[t]
@@ -1028,6 +1031,70 @@ the baselines differ slightly between panels.}
 \label{fig:avenues}
 \end{figure}
 
+\subsection{In-process batch replay}
+\label{sec:batch}
+We extended the replay tool so that one process evaluates many launch
+configurations. The option \code{--batch} reads one pair of team and thread
+counts per line and replays every pair, printing a marker before each one.
+The runtime allocates the recorded memory region once per process and restores
+the recorded inputs before each configuration, so that every configuration
+starts from the recorded state and the recorded pointer arguments remain
+valid. With \code{LIBOMPTARGET\_RR\_DEVICE\_RESTORE}, the runtime keeps a
+copy of the inputs on the device after the first transfer and restores from it
+with a device-to-device copy instead of re-sending 2~GB to 3~GB from host
+memory. The plugin performs the full 1~s warm-up only for the first
+configuration of a process and re-warms for 100~ms before later ones. In the
+tuner, \code{Kernel.sample\_batch} compiles each distinct binary once (launch
+bounds with the same registers and spills share a binary) and evaluates its
+configurations in one process, and it continues in a new process when a
+configuration makes the replay fail. The \code{tpe-batch} strategy asks TPE for
+16 proposals at a time, using Optuna's constant-liar mode so that pending
+proposals are not repeated, groups them by binary, and screens each group in
+one batch replay. As in multi-fidelity screening, the five best screened
+configurations then receive the standard full measurement, and the best of
+them is shipped.
+
+Batch replay cost 0.48~s to 0.58~s per configuration on three kernels, against
+3.7~s to 4.7~s with one process per configuration, and 0.87~s to 1.13~s when
+the inputs were restored from host memory. On the 7~ms kernel l649, batch
+timings matched single-process timings within 0.2\% (median). On the short
+kernels l2103 (1.7~ms) and miniFE l254 (0.95~ms), batch timings were 1\% to
+1.5\% slower, because a batch keeps the GPU under sustained load, which holds
+the T4 at its 70~W limit. NVML reported an SM clock of 1380~MHz to 1455~MHz with
+the power cap active during a batch, against 1590~MHz in short single-process
+replays. Batch screens therefore rank candidates, and the shipped
+configuration is chosen with the standard measurement.
+
+We compared \code{tpe-batch} with multi-fidelity screening that uses one
+process per screen, both under the same real wall-clock budget of 300~s per
+run and without the measurement cache, on l649, l1201, l844, and miniFE l290
+and l521, with three seeds each. Table~\ref{tab:batch} shows the result. Batch
+screening evaluated 239 configurations per run against 36, reached a better
+configuration in 30~s than one process per screen reached in 2 minutes, and
+shipped configurations that were 6.8\% faster (CI [1.017, 1.138]). It was also
+5.3\% faster (CI [1.011, 1.105]) than TPE with 60 full evaluations, which had
+three times the nominal budget and the cache.
+
+\begin{table}[t]
+\centering
+\caption{Batch screening against one process per screen, both with a real
+wall-clock budget of 300~s per run and no measurement cache (five kernels,
+three seeds). Shipped speedups are validated; the best screened speedups are
+geometric means of each run's own screens.}
+\label{tab:batch}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Strategy & Screens per run & Best screen at 30 / 60 / 120~s & Shipped speedup \\
+\midrule
+Multi-fidelity, one process per screen & 36 & 1.111 / 1.251 / 1.406 & 1.443 \\
+Batch screening (\code{tpe-batch}) & 239 & 1.343 / 1.475 / 1.517 & 1.541 \\
+TPE, 60 full evaluations (cached) & 60 & --- & 1.463 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+
 %=============================================================================
 \section{Discussion and recommendations}
 \label{sec:discussion}
@@ -1046,6 +1113,9 @@ of model features, initial design, budget, and stopping rule matters more.
 We recommend the following changes to the tuner, in order of expected
 benefit per unit of effort.
 \begin{enumerate}
+\item Screen candidates with in-process batch replay (Section~\ref{sec:batch}),
+  which made each screen about eight times cheaper, and confirm the finalists
+  with the standard measurement.
 \item Keep the v3 measurement, including the metrics warm-up, the exclusivity
   guard, and validation of the shipped configuration against the baseline,
   with the default kept when the validated gain is below about 2\%.
@@ -1075,8 +1145,10 @@ The offline estimates in Sections~\ref{sec:offline}, \ref{sec:targets},
 and~\ref{sec:efficiency} use pools of configurations that earlier searches
 chose, which bias them toward the regions those searches visited, and the
 surrogate oracle used for the transfer estimates extrapolates beyond the
-measured configurations. Repeated launches in timing mode reuse modified
-buffers, which can change the behavior of kernels that update their inputs.
+measured configurations. Repeated launches of one configuration in timing
+mode reuse modified buffers, which can change the behavior of kernels that
+update their inputs, although batch replay restores the inputs between
+configurations.
 
 %=============================================================================
 \section{Reproducibility}
@@ -1095,7 +1167,9 @@ a \code{RESULTS.md} file: \code{optimizer-study-2026-10-09}
 (Sections~\ref{sec:metrics} and~\ref{sec:targets}),
 \code{adaptive-2026-10-10} (Section~\ref{sec:adaptive}), and
 \code{search-efficiency-2026-10-10} (Section~\ref{sec:efficiency}), and
-\code{avenues-online-2026-10-11} (Section~\ref{sec:avenues}).
+\code{avenues-online-2026-10-11} (Section~\ref{sec:avenues}), and
+\code{batch-replay-2026-10-11} (Section~\ref{sec:batch}). Batch replay is
+commit \code{b6fd8c751}.
 Optuna~3.6.1 is not part of the container, and the studies installed it in an
 experiment-local directory on \code{PYTHONPATH}. Table~\ref{tab:env} lists the
 environment variables that control the new behavior.
