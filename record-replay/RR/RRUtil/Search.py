@@ -194,6 +194,17 @@ def classify_bottleneck(metrics, sm_saturated=80.0):
     return 'other'
 
 
+def classification_margin(metrics, sm_saturated=80.0):
+    """Smallest distance (percentage points) of the metrics used by
+    classify_bottleneck to its thresholds; -1 if a metric is missing."""
+    sm = metrics.get('sm__throughput.avg.pct_of_peak_sustained_elapsed')
+    dram = metrics.get('dram__throughput.avg.pct_of_peak_sustained_elapsed')
+    occ = metrics.get('sm__warps_active.avg.pct_of_peak_sustained_active')
+    if sm is None or dram is None or occ is None:
+        return -1.0
+    return float(min(abs(sm - sm_saturated), abs(dram - 70), abs(occ - 80), abs(occ - 60)))
+
+
 def _z(values):
     import numpy as np
     v = np.asarray(values, float)

@@ -50,6 +50,10 @@ class Kernel:
     SaturatedBudget = int(os.environ.get('RR_SATURATED_BUDGET', 15))
     # Baseline metric samples whose median classifies the kernel (adaptive).
     ClassifySamples = int(os.environ.get('RR_CLASSIFY_SAMPLES', 3))
+    # One profiled baseline sample suffices unless it failed or a classification
+    # metric lies within ClassifyMargin points of a threshold (Kernel.Search).
+    ClassifyAdaptive = os.environ.get('RR_CLASSIFY_ADAPTIVE', '1') != '0'
+    ClassifyMargin = float(os.environ.get('RR_CLASSIFY_MARGIN', 5))
     # Extra perfworks metrics collected in the metrics replay (validated on
     # T4 / sm_75). Request counts do not vary with launch configuration;
     # these capture traffic, cache behaviour, utilisation and spills.
@@ -598,6 +602,7 @@ class Kernel:
         """
         from RRUtil.Search import (make_searcher, objective_values, build_compile_table,
                                    compile_features, classify_bottleneck, build_portfolio,
+                                   classification_margin,
                                    config_to_point)
         options = dict(options or {})
         pBounds = self.getBounds(**kwargs)
@@ -661,7 +666,23 @@ class Kernel:
             # Classify from the median of several baseline metric samples; a
             # single profiled launch can be power-throttled.
             samples = db.Data[self.getDefaultKey()].get('metrics_samples', [base_metrics])
-            while len(samples) < self.ClassifySamples:
+            # Adaptive: a profiled replay costs a fixed 4-35 s whatever the number of
+            # metrics, and a single warmed profile gave the same class as the median
+            # of three in 99.5% of 873 samples; every disagreement was a failed
+            # profile or a metric within 5 points of a threshold. So when the first
+            # profile is complete and clear of the thresholds, the remaining baseline
+            # samples are timing-only (they only refine the baseline duration).
+            if (self.ClassifyAdaptive and len(samples) == 1
+                    and classify_bottleneck(samples[0]) != 'unknown'
+                    and classification_margin(samples[0], self.SaturatedSMPct or 80.0)
+                    >= self.ClassifyMargin):
+                for _ in range(self.ClassifySamples - 1):
+                    BValid, _, _, BDuration, BEnergy, _, _ = self.sample(Tries=1, Screen=True)
+                    if BValid:
+                        db.AddSamples(self.getDefaultKey(), BDuration, BEnergy)
+                db.Data[self.getDefaultKey()]['classify_profiles'] = 1
+            while len(samples) < self.ClassifySamples and \
+                    db.Data[self.getDefaultKey()].get('classify_profiles') != 1:
                 BValid, _, _, BDuration, BEnergy, _, _ = measure({})
                 if not BValid:
                     break
