@@ -1928,7 +1928,23 @@ baseline is measured, and caches the trained models on disk under a key of the
 training data, the parameters, and the seed, so that the other kernels of the
 same application load them in 0.3~s. The same run then took 92~s to 93~s
 with an empty or a filled cache and shipped the same configuration. The
-remaining time before the search is the profiled baseline measurements.
+remaining time before the search was the three profiled baseline
+measurements. Collecting only the four metrics that the classification uses
+did not make them faster: on seven kernels, a profiled replay took the same
+time with 10 as with 21 metrics (from 5~s on minisweep l383 to 37~s on AMGmk,
+against 2~s to 5~s for a timing-only replay), because its cost is a fixed
+overhead per replay. Profiling once is almost always enough. Over 873 stored
+baseline profiles from all earlier runs (291 runs on 32 kernels), the class of
+a single profile equalled the class of the median of three in 99.5\% of
+cases, and the four exceptions were two failed profiles and two profiles with
+a metric close to a classification threshold. The tuner therefore profiles
+the baseline once and takes the other two baseline samples timing-only,
+unless the profile failed or SM throughput, DRAM throughput, or occupancy lies
+within 5 points of a threshold, in which case it profiles twice more as
+before. Replayed on the 873 stored profiles, this rule gave the three-profile
+class in every case and needed the extra profiles in 5.4\% of runs. The S3D
+l171 run then took 58~s end to end, against 92~s, and the search began after
+25~s instead of 58~s.
 
 The online speedups of AMGmk (1.67\x{}) and SU3 (1.65\x{}) exceed the optima of
 their landscapes (1.43\x{} and 1.29\x{}). The online candidate set uses 28 teams
