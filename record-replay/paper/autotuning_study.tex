@@ -73,7 +73,10 @@ loss does: it reaches good configurations earliest offline, and online, with
 a stop after two batches without gain, it ships the same configurations in
 about half the search time. With a cheap confirmation of the finalists in
 batch replay and four GPUs, a kernel is tuned in about 105~s end to end,
-about 38\x{} faster than the original workflow.
+about 38\x{} faster than the original workflow. On 31 kernels of ten further
+proxy applications from HeCBench, tuned as new applications with models
+trained on the other applications, this tuner ships the same speedups as
+batch TPE (1.56\x{} on the 14 kernels with headroom) in 31\% less time.
 \end{abstract}
 
 \tableofcontents
@@ -137,6 +140,10 @@ In this work, we make the following contributions:
   a ranking-weighted GP ensemble, and the learned policy, and that with a
   patience stop it halves the search time online at the same quality
   (Section~\ref{sec:learnedtransfer}).
+\item We add 31 kernels of ten HeCBench proxy applications, measure their
+  complete configuration spaces, and show that the ranking model transfers to
+  applications it was not trained on, matching batch TPE online in 31\% less
+  time (Section~\ref{sec:hecbench}).
 \end{itemize}
 
 %=============================================================================
@@ -1750,6 +1757,180 @@ Strategy & Shipped & Search & Confirmation & In search & End to end \\
 \end{table}
 
 %=============================================================================
+\section{More applications from HeCBench}
+\label{sec:hecbench}
+
+All results so far come from two applications. Learned and transferred
+tuners need many more kernels, and a tuner should be tested on applications
+it has not seen. We therefore added proxy applications from
+HeCBench~\cite{jin2023hecbench}, a collection of several hundred benchmarks with
+CUDA, HIP, SYCL, and OpenMP offload versions. We chose its OpenMP offload
+versions of twelve proxy applications from scientific computing: XSBench and
+RSBench (neutron cross-section lookups), SimpleMOC (method of characteristics
+transport), SU3 (lattice QCD matrix multiplication), miniBUDE (molecular
+docking), HACCmk (cosmology short-range force), AMGmk (algebraic multigrid
+relaxation), minisweep (radiation transport sweep), sw4ck (seismic wave
+curvilinear kernels), testSNAP (machine-learned interatomic potential), S3D
+(combustion chemistry), and miniWeather (atmospheric dynamics).
+
+\subsection{Building and recording}
+HeCBench builds its OpenMP offload versions with clang for AMD GPUs. We
+retargeted each makefile to \code{nvptx64} and \code{sm\_75} with the same
+flags as LULESH and miniFE, including offload LTO and the embedded device
+bitcode that kernel extraction needs. Two applications needed more. The
+input data of testSNAP and miniBUDE are kept in HeCBench's data store and
+were downloaded and checked against their recorded checksums. The HeCBench
+port of miniWeather uses MPI, which the container lacks, so we built it
+against a stub of the eleven MPI calls it uses for a single rank, in which
+the halo exchange sends to the same rank; it passes its own mass and energy
+check. All twelve applications passed their own checks where they have one.
+A thin wrapper class per application lets the tuner build, record, and
+replay it like LULESH and miniFE.
+
+The recorder captures a kernel at its first launch (and again only if a later
+launch uses more teams), so the recording cost does not grow with the number
+of time steps, but the recording run also profiles every launch, which made
+the 3600-step miniWeather run take hours. We recorded it with 60 steps
+instead, which gives the same recorded inputs. We timed every recorded
+kernel at its default configuration and kept the kernels that run for
+0.1~ms to 100~ms and are loops with a trip count. To bring kernels into this
+range we reduced the lookups of XSBench (from 307~ms to 30~ms) and RSBench
+(from 4.8~s to 50~ms) and the segments of SimpleMOC, and used the largest
+problem size of S3D (whose kernels took 4~$\mu$s to 15~$\mu$s at the
+smallest size). We excluded testSNAP, whose problem size is fixed by its
+reference data at loops of 2 to 50 iterations, miniBUDE and 13 S3D regions,
+which are \code{teams} regions that index the teams by hand, so that changing
+the number of teams would change their result, and seven kernels that remained
+shorter than 0.1~ms. This left 31 kernels from ten applications.
+
+\subsection{Landscapes}
+We measured the exhaustive landscape of all 31 kernels as in
+Section~\ref{sec:rl} and classified each from three warmed baseline profiles.
+Fourteen kernels have an optimum above 1.05\x{}: the three short-loop kernels
+of minisweep (3.4\x{}, register-bound, with only 44 to 89 distinct
+configurations because their loops have 200 iterations), its fourth kernel
+(1.61\x{}), S3D l171 (1.56\x{}), miniWeather l760 (1.52\x{}), AMGmk (1.43\x{}),
+SU3 (1.29\x{}), S3D l159 (1.18\x{}), SimpleMOC (1.12\x{}), and four further S3D
+kernels between 1.05\x{} and 1.07\x{}. The other 17 kernels are within 5\% of
+their default, among them the four sw4ck kernels, which use 255 registers and
+whose default is optimal within 1\%, so a tuner must also recognize when there
+is nothing to gain. Together with the 17 LULESH and miniFE kernels, the
+landscapes contain 66{,}110 configurations of 48 kernels from twelve
+applications.
+
+\subsection{Offline transfer across applications}
+We repeated the offline comparison of Section~\ref{sec:learnedtransfer} on all
+48 kernels with three folds: leave-one-kernel-out (LOKO), in which every other
+kernel is used for training; \emph{leave-one-application-out} (LOAO), in which
+the kernels of the tested application are excluded from training, as when a
+new application is tuned; and, for the HeCBench kernels, training on the 17
+LULESH and miniFE kernels only (base17). Table~\ref{tab:hecoffline} shows the
+share of the optimum for the 25 kernels with an optimum above 1.05\x{}.
+
+\begin{table}[t]
+\centering
+\caption{Share of the optimum log speedup after 1, 5, and 10 evaluations on
+the landscapes of 48 kernels (25 with an optimum above 1.05\x{}). LOAO leaves
+the tested application out of training; base17 trains on LULESH and miniFE
+only. Methods that do not use other kernels (GP-EI, TPE) have the same values
+in every fold.}
+\label{tab:hecoffline}
+\small
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{lccccc}
+\toprule
+Fold (kernels) & Ranking model & Regression model & RGPE & GP-EI & TPE \\
+\midrule
+LOKO (25) & \textbf{.52/.67/.78} & .43/.55/.60 & .27/.54/.73 & .14/.38/.71 & .16/.32/.46 \\
+LOAO (25) & \textbf{.36/.57/.73} & .33/.57/.60 & .25/.49/.65 & .14/.38/.71 & .16/.32/.46 \\
+LOAO, HeCBench (14) & .15/.46/.62 & .23/.51/.54 & .28/.45/.58 & .08/.29/.62 & .10/.23/.35 \\
+base17, HeCBench (14) & .15/.33/.58 & .37/.48/.60 & .10/.15/.45 & .08/.29/.62 & .10/.23/.35 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+With all 48 kernels available, the ranking model was significantly better than
+every other method after one and five evaluations in LOKO, for example by
++0.125 [+0.021, +0.246] over the regression model after five, and it reached
+0.82 and 0.93 of the optimum on the LULESH and miniFE kernels after five and ten
+evaluations, against 0.76 and 0.91 with only those 17 kernels
+(Section~\ref{sec:learnedtransfer}). A new application is harder. In LOAO the
+ranking model was still significantly better than TPE and GP-EI after one and
+five evaluations and than the regression model after ten (+0.129 [+0.041,
++0.225]), but on the HeCBench kernels alone GP-EI caught up with it after ten
+evaluations. More training applications helped RGPE most: on the HeCBench
+kernels, training on the eleven other applications instead of LULESH and miniFE
+raised RGPE by +0.293 [+0.086, +0.514] after five evaluations and +0.138
+[+0.019, +0.284] after ten, because RGPE can choose among more training
+kernels the ones that rank the new kernel's observations well. The ranking
+model gained +0.122 after five evaluations, which is not significant (it was
++0.203 and significant before the miniWeather kernels were added), and the
+regression model gained nothing. The kernels that every method found hard
+were the S3D kernels with little headroom, where no method found the optimum
+region within five evaluations, and SU3, where TPE reached 0.67 of the optimum
+after five evaluations and the transferred models at most 0.14.
+
+\subsection{Online tuning of a new application}
+We then tuned the 14 kernels with headroom online with the final strategy of
+Section~\ref{sec:confirm} on one GPU (\code{rank-confirm}), training the ranking
+models on the landscapes of the eleven other applications, and with
+\code{tpe-batch} (300~s budget), which uses no other kernels, with three seeds
+each, and validated the shipped configurations of both strategies with the
+baseline in the same five randomized rounds. Table~\ref{tab:heconline} and
+Figure~\ref{fig:hecbench} show the result.
+
+\begin{table}[t]
+\centering
+\caption{Online tuning of 14 HeCBench kernels as a new application (three seeds,
+no cache). The ranking model is trained on the other eleven applications.
+Speedups are validated against the baseline in the same five randomized
+rounds; times are means per run.}
+\label{tab:heconline}
+\small
+\begin{tabular}{lrr}
+\toprule
+& \code{rank-confirm} & \code{tpe-batch} \\
+\midrule
+Shipped speedup (geometric mean) & 1.562 & 1.570 \\
+End-to-end time & 229~s & 332~s \\
+Search time & 75~s & 182~s \\
+Screened configurations & 70 & 241 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{hecbench}
+\caption{Validated speedup of the shipped configuration per HeCBench kernel
+(geometric mean of three seeds) for the ranking model with the patience stop
+and batch confirmation, trained on the other applications, and for batch TPE,
+with the optimum of each kernel's landscape.}
+\label{fig:hecbench}
+\end{figure}
+
+The two strategies shipped configurations of the same quality (ratio 0.995
+[0.989, 1.001]), with speedups of up to 3.4\x{} on minisweep, 1.67\x{} on AMGmk,
+1.65\x{} on SU3, and 1.54\x{} on S3D l171, and \code{rank-confirm} took 31\%
+less time end to end (229~s against 332~s per kernel). It shipped slower
+configurations than \code{tpe-batch} by more than 0.5\% on four kernels, most on
+S3D l226 (1.02\x{} against 1.06\x{}) and miniWeather l760 (1.41\x{} against
+1.44\x{}), and faster ones on two. The patience stop fired in all 42 runs. The
+time before the search was about 140~s per run, twice that on LULESH and
+miniFE, mostly for training the bagged rankers on about 60{,}000
+configurations of the other applications, which could be cached between
+kernels.
+
+The online speedups of AMGmk (1.67\x{}) and SU3 (1.65\x{}) exceed the optima of
+their landscapes (1.43\x{} and 1.29\x{}). The online candidate set uses 28 teams
+fractions and every launch bound of each binary, while a landscape uses 16
+teams fractions and one launch bound per binary. The landscapes therefore
+underestimate the attainable gain of some kernels, and the shares of the
+optimum in Sections~\ref{sec:rl}, \ref{sec:learnedtransfer},
+and~\ref{sec:hecbench} are relative to the best configuration of the
+landscape, not of the full space.
+
+%=============================================================================
 \section{Discussion and recommendations}
 \label{sec:discussion}
 
@@ -1767,7 +1948,9 @@ cost of each evaluation matters more. Together, these changes made tuning
 about 38\x{} faster end to end than the original workflow on four GPUs (29\x{}
 on one) and improved the true speedup of the shipped configurations from
 1.39\x{} to 1.53\x{} on the five kernels that we compared end to end
-(Sections~\ref{sec:endtoend} and~\ref{sec:confirm}).
+(Sections~\ref{sec:endtoend} and~\ref{sec:confirm}). On ten further
+applications from HeCBench, tuned as new applications, the same tuner matched
+batch TPE in 31\% less time (Section~\ref{sec:hecbench}).
 
 We recommend the following changes to the tuner, in order of expected
 benefit per unit of effort.
@@ -1811,9 +1994,11 @@ application (Section~\ref{sec:rl}).
 \subsection{Limitations}
 A limitation of this study is that it used one GPU model, the T4, which has a
 low power limit and weak FP64 throughput, which affects both the bottleneck
-classes and the time-energy trade-off. The applications were two proxy
-applications with one recorded input each. The classification thresholds were
-derived from the ten LULESH kernels, and miniFE is the only held-out test.
+classes and the time-energy trade-off. Most sections use two proxy
+applications with one recorded input each; Section~\ref{sec:hecbench} adds ten
+HeCBench applications, also with one input each and with inputs chosen to fit
+the timing range. The classification thresholds were derived from the ten
+LULESH kernels.
 The offline estimates in Sections~\ref{sec:offline}, \ref{sec:targets},
 and~\ref{sec:efficiency} use pools of configurations that earlier searches
 chose, which bias them toward the regions those searches visited, and the
@@ -1866,7 +2051,13 @@ in that directory's \code{pylib}. The batch confirmation and the multi-GPU repla
 Section~\ref{sec:confirm} are commit \code{96aac7c74} (options \code{confirm}
 and \code{devices} of \code{Kernel.Search}), with the runs in
 \code{learned-transfer-2026-10-13/online/mgpu} (\code{orchestrate.sh},
-\code{analyze\_mgpu.py}, \code{analysis.log}).
+\code{analyze\_mgpu.py}, \code{analysis.log}). The HeCBench study of
+Section~\ref{sec:hecbench} is in \code{hecbench-2026-10-13} (recording probes,
+\code{landscape\_hec.py}, \code{hec\_offline.py}, \code{hec\_search\_run.py},
+\code{online/}, \code{RESULTS.md}); the HeCBench build, its makefiles, the MPI
+stub, and the recordings are in \code{/data2/nmn/rr-metrics/hecbench}, and the
+application wrappers are commit \code{126201dce}
+(\code{record-replay/RR/benchmarks/hecbench}).
 Optuna~3.6.1 is not part of the container, and the studies installed it in an
 experiment-local directory on \code{PYTHONPATH}. Table~\ref{tab:env} lists the
 environment variables that control the new behavior.

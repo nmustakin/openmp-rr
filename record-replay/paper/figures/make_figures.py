@@ -460,9 +460,32 @@ def fig_learned():
     save(fig, 'learned')
 
 
+# ---------------------------------------------------------------- 14. HeCBench online
+def fig_hec():
+    H = f'{X}/hecbench-2026-10-13'
+    r = pd.read_csv(f'{H}/online/shipped.csv')
+    t = r.groupby(['kernel', 'method']).speedup.apply(gmean).unstack('method')
+    t['opt'] = r.groupby('kernel').landscape_opt.first()
+    t = t.sort_values('tpe-batch', ascending=False)
+    fig, ax = plt.subplots(figsize=(TWO, 2.2))
+    x = np.arange(len(t)); w = 0.38
+    ax.bar(x - w / 2, t['rank-confirm'], w, color=SLOT[0], label='Ranking model, patience stop')
+    ax.bar(x + w / 2, t['tpe-batch'], w, color=SLOT[1], label='Batch TPE (300 s)')
+    ax.scatter(x, t['opt'], marker='_', s=120, color=INK, zorder=3, label='Landscape optimum')
+    ax.axhline(1.0, color=INK2, linewidth=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels([k.replace('MINISWEEP', 'minisweep').replace('MINIWEATHER', 'miniWeather')
+                        .replace('SIMPLEMOC', 'SimpleMOC').replace('-', ' l') for k in t.index],
+                       rotation=40, ha='right', fontsize=6.5)
+    ax.set_ylabel('Validated speedup')
+    ax.set_yscale('log'); ax.set_yticks([1, 1.25, 1.5, 2, 3]); ax.set_yticklabels(['1', '1.25', '1.5', '2', '3'])
+    ax.legend(loc='upper right', fontsize=6.5)
+    save(fig, 'hecbench')
+
+
 if __name__ == '__main__':
     for f in [fig_clock_ramp, fig_winners_curse, fig_measurement, fig_anytime, fig_time_energy,
-              fig_dram, fig_classes, fig_meta_effect, fig_cost, fig_initial, fig_avenues, fig_rl, fig_learned]:
+              fig_dram, fig_classes, fig_meta_effect, fig_cost, fig_initial, fig_avenues, fig_rl, fig_learned, fig_hec]:
         try:
             f()
         except Exception as e:
