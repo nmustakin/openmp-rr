@@ -121,6 +121,13 @@ In this work, we make the following contributions:
   on held-out miniFE kernels, and quantify further avenues for reaching good
   configurations with fewer evaluations
   (Sections~\ref{sec:targets} to~\ref{sec:efficiency}).
+\item We measure the complete launch-configuration space of all 17 kernels
+  with batch replay and use it to train search policies with reinforcement
+  learning. With the transfer model's and a GP's predictions as inputs, a
+  learned policy consistently beats TPE in the first ten evaluations and
+  transfers better between applications than the transfer model, but within
+  the same applications the transfer model remains better
+  (Section~\ref{sec:rl}).
 \end{itemize}
 
 %=============================================================================
@@ -1219,6 +1226,237 @@ Time to reach the original's quality (median) & & about 4000~s & 9~s & 24~s \\
 
 
 %=============================================================================
+\section{Learned search policies}
+\label{sec:rl}
+
+The strategies so far use hand-designed acquisition functions such as EI,
+UCB, and the TPE density ratio. A tuner could instead \emph{learn} how to
+choose the next configuration from the tuning of earlier kernels. In
+\emph{reinforcement learning} (RL), an \emph{agent} interacts with an
+\emph{environment} in \emph{episodes}. At each step it observes a
+\emph{state}, chooses an \emph{action} according to a \emph{policy}, and
+receives a \emph{reward}, and it adjusts the policy to maximize the expected
+sum of rewards. In our setting, an episode is the search on one kernel, an
+action is the choice of the next configuration to evaluate, the state is the
+set of configurations evaluated so far with their speedups, and the reward is
+the improvement of the best speedup found. A policy trained on some kernels
+is then a learned acquisition function for others, as in
+MetaBO~\cite{volpp2020metabo}, and RL has been used to steer the search of
+tensor compilers~\cite{ahn2020chameleon}. We tested whether such a policy
+reaches good configurations in fewer evaluations than the strategies above,
+first with the policy alone and then with the predictions of the transfer
+cost model and of a GP as additional inputs.
+
+\subsection{Exhaustive landscapes as an offline environment}
+Training a policy requires thousands of episodes, far more than can be run
+online. We therefore measured the complete launch-configuration space of all
+17 kernels with batch replay (Section~\ref{sec:batch}), which gives an exact
+offline environment in which evaluating a configuration is a table lookup.
+For each kernel we kept one launch bound per distinct binary, namely the one
+with the largest MaxThreads among the bounds that produce the same register
+and spill counts (Section~\ref{sec:efficiency}). For each binary we combined
+every multiple of 32 threads up to its MaxThreads with 16 teams fractions
+spaced logarithmically between 1/256 and 1, and we removed duplicate launches
+and launches that exceed the register file. Speedups are relative to the mean
+of the default configuration measured at the start and at the end of each
+kernel's run. The \emph{landscapes} contain 20{,}560 configurations, between
+512 and 2{,}256 per kernel, and took about two GPU-hours on eight T4 GPUs.
+Eleven kernels have an optimum above 1.05\x{} (LULESH l333, l649, l844,
+l1029, l1080, l1201, and miniFE l169, l205, l210, l290, l521), and we report
+results on these, because on the others every method trivially reaches a
+share near the optimum or the share is undefined.
+
+Each method proposes 30 distinct configurations of one kernel. The score
+after $n$ evaluations is the \emph{share of the optimum}, the best log
+speedup found in the first $n$ proposals divided by the kernel's optimum log
+speedup, with negative values counted as zero. A share of 1 means that the
+optimum was found. Stochastic methods use 20 seeds. We used three
+\emph{folds}, that is, splits into training and test kernels. In
+\emph{leave-one-kernel-out} (LOKO), each kernel is tested with a policy
+trained on the other 16. In \emph{LULESH $\to$ miniFE} and \emph{miniFE $\to$
+LULESH}, the policy is trained on all kernels of one application and tested
+on the other, which measures transfer to a new application.
+
+\subsection{Methods}
+We compared the following methods on the same landscapes.
+\begin{itemize}
+\item \code{random}, uniform sampling without repeats.
+\item \code{tpe}, Optuna TPE with 10 random startup trials over the binary,
+  the thread count, and the teams fraction, with each proposal snapped to the
+  nearest untried configuration.
+\item \code{gp\_ei}, a GP with a Mat\'ern ($\nu = 2.5$) kernel and a noise
+  term on the kernel's own observations, with EI and five random initial
+  configurations, so its first five proposals are random.
+\item \code{transfer\_ei}, the transfer cost model of
+  Section~\ref{sec:avenues}: ExtraTrees fitted on the training kernels'
+  landscapes and on the test kernel's own observations (weighted 20 times),
+  with EI computed from the spread of the trees. It is deterministic.
+\item \code{rl}, a policy network. For each untried configuration it computes
+  a score from 16 features, and the next configuration is drawn from a
+  softmax over the scores of all untried configurations. Ten features
+  describe the configuration and do not depend on the kernel's identity: the
+  logarithms of the thread count and teams fraction, registers, spills,
+  theoretical occupancy, the number of waves, the fill of the last wave, and
+  the bottleneck class (Section~\ref{sec:adaptive}) as three indicator
+  variables. Six features describe the search so far: the best log speedup,
+  the fraction of the budget used, an inverse-distance-weighted estimate from
+  the three nearest evaluated configurations relative to the best, the
+  distance to the nearest evaluated configuration and to the best one, and
+  the nearest evaluated configuration's log speedup relative to the best. The
+  network is a multilayer perceptron with two hidden layers of 64
+  $\tanh$ units.
+\item \code{rl\_hybrid}, the same policy with six model features added (22
+  inputs). Three come from the transfer cost model, namely its predicted log
+  speedup relative to the best observed so far, its uncertainty, and its EI.
+  Three come from a GP fitted to the kernel's own observations, namely the
+  same three quantities, which are zero until two configurations have been
+  evaluated. The transfer model here is fitted on the training kernels only,
+  so its prediction does not change during the search, while the GP is refitted
+  after every evaluation. When the policy is trained on a training kernel,
+  that kernel's transfer predictions come from a model fitted on the other
+  training kernels, so that the predictions seen during training are as
+  inaccurate as those seen at test time. Without this nested fit, the policy
+  would learn to trust predictions that are nearly exact on its training
+  kernels. The model features are scaled by 5 and clipped to $\pm 10$.
+\item \code{gp\_transfer\_ei}, a fixed combination of the same two models
+  without learning: a GP fitted to the residuals of the kernel's observations
+  from the transfer model's prediction, with EI on the sum of the transfer
+  prediction and the GP's residual prediction. It tests whether combining the
+  models is enough, without a learned policy.
+\end{itemize}
+The \code{\_greedy} variants of the two policies take the highest-scoring
+configuration at each step instead of sampling. Both policies are trained
+with \emph{REINFORCE}~\cite{williams1992reinforce}, which increases the
+log-probability of each chosen action in proportion to its
+\emph{advantage}. The advantage is the \emph{return-to-go}, the sum of the
+rewards from that step to the end of the episode, minus its mean at the same
+step over the batch of episodes, normalized by the standard deviation. The
+reward of a step is the improvement of the best log speedup divided by the
+kernel's optimum, so that every training kernel contributes equally and an
+episode's return is its final share of the optimum. Training uses 250
+iterations of 12 episodes on randomly chosen training kernels with an
+optimum above 1.01\x{}, and the Adam optimizer with a learning rate of
+$3 \times 10^{-3}$. One policy is trained per test kernel and fold. Training
+\code{rl\_hybrid} took 57 to 94~minutes per policy on one CPU core, mostly
+for refitting the GP at every step, whereas \code{rl} fits no models during
+training.
+
+\subsection{Results}
+Table~\ref{tab:rl} and Figure~\ref{fig:rl} show the mean share of the optimum
+after 1, 5, 10, and 30 evaluations. Confidence intervals are 95\%
+kernel-clustered paired bootstrap intervals over the 11 kernels (6 for
+miniFE $\to$ LULESH and 5 for LULESH $\to$ miniFE).
+
+\begin{table}[t]
+\centering
+\caption{Mean share of the optimum log speedup after $n$ evaluations on the
+exhaustive landscapes, for kernels with an optimum above 1.05\x{}. LOKO is
+leave-one-kernel-out (11 kernels); L$\to$M trains on LULESH and tests on
+miniFE (5 kernels); M$\to$L the reverse (6 kernels). The best value in each
+column is in bold.}
+\label{tab:rl}
+\small
+\begin{tabular}{lrrrrrrrr}
+\toprule
+& \multicolumn{4}{c}{LOKO} & \multicolumn{2}{c}{L$\to$M} & \multicolumn{2}{c}{M$\to$L} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-7}\cmidrule(lr){8-9}
+Method & $n=1$ & 5 & 10 & 30 & 5 & 10 & 5 & 10 \\
+\midrule
+\code{random} & 0.275 & 0.514 & 0.608 & 0.747 & 0.635 & 0.714 & 0.414 & 0.520 \\
+\code{tpe} & 0.218 & 0.474 & 0.590 & 0.900 & 0.615 & 0.684 & 0.356 & 0.512 \\
+\code{gp\_ei} & 0.275 & 0.514 & 0.811 & 0.958 & 0.635 & \textbf{0.903} & 0.414 & \textbf{0.735} \\
+\code{transfer\_ei} & 0.465 & \textbf{0.735} & \textbf{0.834} & \textbf{0.966} & 0.599 & 0.627 & 0.453 & 0.591 \\
+\code{gp\_transfer\_ei} & 0.465 & 0.666 & 0.730 & 0.855 & 0.557 & 0.666 & \textbf{0.627} & 0.638 \\
+\code{rl} & 0.293 & 0.588 & 0.743 & 0.916 & 0.670 & 0.742 & 0.508 & 0.689 \\
+\code{rl\_greedy} & 0.504 & 0.595 & 0.722 & 0.954 & 0.566 & 0.585 & 0.613 & 0.684 \\
+\code{rl\_hybrid} & 0.351 & 0.637 & 0.763 & 0.916 & 0.741 & 0.804 & 0.494 & 0.656 \\
+\code{rl\_hybrid\_greedy} & \textbf{0.544} & 0.675 & 0.684 & 0.888 & \textbf{0.821} & 0.848 & 0.462 & 0.616 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{rl}
+\caption{Mean share of the optimum log speedup against the number of
+evaluations on the exhaustive landscapes, for kernels with an optimum above
+1.05\x{}, in the three folds. RL + model inputs is \code{rl\_hybrid}.}
+\label{fig:rl}
+\end{figure}
+
+\paragraph{The policy alone.} The policy without model inputs learned a
+useful early search. In LOKO it reached 0.588 of the optimum after five
+evaluations and 0.743 after ten, against 0.474 and 0.590 for TPE (differences
++0.115 [$-$0.006, +0.238] and +0.153 [$-$0.001, +0.305]), and it was
+significantly better than TPE when trained on miniFE and tested on LULESH
+(+0.177 [+0.039, +0.376] after ten evaluations). It did not beat the transfer
+cost model, which reached 0.735 after five evaluations in LOKO, and the GP
+caught up with it after ten. The policy was also inconsistent across kernels.
+After ten evaluations it was the best method on the register-bound kernels
+l844 (0.898) and l1080 (0.763), but it nearly failed on the reductions l1201
+(0.147) and miniFE l290 (0.253), which need very few teams, because only
+three training kernels are reductions.
+
+\paragraph{The policy with model inputs.} The model inputs made the policy
+more consistent. \code{rl\_hybrid} was significantly better than TPE in all
+three folds after 1, 5, and 10 evaluations, for example +0.164 [+0.113,
++0.219] after five and +0.174 [+0.124, +0.232] after ten in LOKO, where it was
+better on all 11 kernels. It was also significantly better than
+\code{gp\_ei} after one and five evaluations in every fold (+0.123 [+0.073,
++0.172] after five in LOKO), because it does not start with random
+configurations, although the GP overtook it after ten evaluations (LOKO
+$-$0.048 [$-$0.153, +0.052]). Compared with the policy without model inputs,
+it improved by only +0.049 after five evaluations in LOKO, which is not
+significant. Its effect differed between kernels. The model inputs fixed the
+reductions (after ten evaluations, l1201 rose from 0.147 to 0.619 and miniFE
+l290 from 0.253 to 0.458), but the policy lost its advantage on the
+register-bound kernels (l844 fell from 0.898 to 0.526 and l1080 from 0.763 to
+0.353). The policy learned to follow the transfer model, and so inherited its
+blind spots: the transfer model reached only 0.385 on l844 and 0.525 on l1080.
+
+\paragraph{Against the transfer cost model.} Within the same applications
+(LOKO), the transfer cost model remained significantly better than
+\code{rl\_hybrid} after five evaluations ($-$0.098 [$-$0.178, $-$0.019]) and
+ten evaluations ($-$0.071 [$-$0.140, $-$0.005]). Across applications, the
+picture reverses. When trained on LULESH and tested on miniFE, the transfer
+model reached only 0.627 after ten evaluations and 0.718 after 30, less than
+random search, because the configurations that suit the LULESH kernels do not
+suit the miniFE kernels. \code{rl\_hybrid} was significantly better (+0.142
+[+0.010, +0.346] after five, +0.177 [+0.048, +0.399] after ten, and +0.206
+[+0.026, +0.406] after 30 evaluations) and was the best method after five
+evaluations (0.741, or 0.821 greedy). The policy learned when the transferred
+predictions are worth following and how to fall back on the kernel's own
+observations. Trained on miniFE and tested on LULESH, the two methods did not
+differ significantly.
+
+\paragraph{The fixed combination.} \code{gp\_transfer\_ei}, which combines
+the same two models without learning, was erratic. It was the best method on
+l1201 and miniFE l290, but after ten evaluations on miniFE l521 it had not
+found any configuration faster than the baseline (share 0.000), against 0.951
+for the transfer model alone. On that kernel the transfer model predicts a
+gain of about 2.3\x{} for full-occupancy configurations with large blocks,
+which suit the LULESH locality-bound kernels l649 and l1029, but all of these
+configurations are slower than the baseline on miniFE l521. A GP fitted to
+the residuals shifts all predictions by about the same amount, so the ranking
+of candidates does not change, and EI keeps proposing configurations from the
+same region. The learned policy avoided this failure (0.986), which shows
+that learning how to weigh the two models matters more than having both.
+
+\paragraph{Summary.} RL can learn a tuning policy that beats TPE and random
+search in the first ten evaluations and, with the transfer and GP predictions
+as inputs, does so consistently across folds. With 17 kernels, however, it
+does not beat the simpler transfer cost model within the same applications,
+and it costs about an hour of training per policy. The learned policy is
+most useful when a new application is tuned with a model trained on another,
+where the transfer model generalizes poorly. We therefore keep the transfer
+model with EI in the tuner (Section~\ref{sec:combinedbatch}) and consider the
+learned policy a candidate for transfer to new applications, which would need
+many more training kernels to evaluate. These results are offline. The
+landscapes have one batch timing per configuration, with a noise of about
+1\%, and the discretized teams fractions do not include every configuration
+that an online search could propose.
+
+%=============================================================================
 \section{Discussion and recommendations}
 \label{sec:discussion}
 
@@ -1262,6 +1500,10 @@ benefit per unit of effort.
 \item Use MOTPE when energy matters, because it finds the time-energy
   trade-off at no cost in speed.
 \end{enumerate}
+A search policy learned with reinforcement learning is not yet worth adding
+to the tuner. With 17 training kernels, it does not beat the transfer cost
+model within the same applications, although it transfers better to a new
+application (Section~\ref{sec:rl}).
 
 \subsection{Limitations}
 A limitation of this study is that it used one GPU model, the T4, which has a
@@ -1276,7 +1518,9 @@ surrogate oracle used for the transfer estimates extrapolates beyond the
 measured configurations. Repeated launches of one configuration in timing
 mode reuse modified buffers, which can change the behavior of kernels that
 update their inputs, although batch replay restores the inputs between
-configurations.
+configurations. The learned policies were evaluated only offline, on
+exhaustive landscapes with one batch timing per configuration and
+discretized teams fractions, and were trained on 16 kernels or fewer.
 
 %=============================================================================
 \section{Reproducibility}
@@ -1301,6 +1545,13 @@ commit \code{b6fd8c751}, and the combined strategy with the convergence stop is
 commit \code{6f5c4c482} (\code{combined-batch-2026-10-12}, which also holds
 the end-to-end comparison in \code{validate\_original.py},
 \code{original-l*.json}, and \code{convergence\_vs\_original.log}).
+The learned policies of Section~\ref{sec:rl} are in
+\code{rl-tuning-2026-10-13}: \code{landscape.py} measured the exhaustive
+landscapes (\code{landscape/*.csv}), \code{rl\_tune.py} and
+\code{rl\_hybrid.py} run the offline comparison, and \code{analyze\_rl.py}
+and \code{analyze\_hybrid.py} compute the summaries and confidence
+intervals. PyTorch~2.4.1 (CPU) was installed in that directory's
+\code{pylib}.
 Optuna~3.6.1 is not part of the container, and the studies installed it in an
 experiment-local directory on \code{PYTHONPATH}. Table~\ref{tab:env} lists the
 environment variables that control the new behavior.
