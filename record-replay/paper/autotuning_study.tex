@@ -64,16 +64,16 @@ configurations in one process, with the inputs restored on the device between
 them, cuts the cost of a configuration from about 4~s to 0.5~s, and with the
 same 300~s budget it ships 6.8\% faster configurations than screening with
 one process per configuration. Adding a convergence-based stop to batch
-screening gives the same quality in about half the time, roughly 2.5 minutes
-per kernel instead of about 15 for Bayesian optimization with 60 full
-evaluations. Against the workflow we started from, which took about 67
+screening gives the same quality in about half the search time. Against the workflow we started from, which took about 67
 minutes per kernel and shipped configurations with a true speedup of
-1.39\x{}, the final strategy is about 19\x{} faster end to end and ships
+1.39\x{}, that strategy is about 15\x{} faster end to end and ships
 1.53\x{}. A search policy learned with reinforcement learning does not beat a
 transferred cost model, but training that cost model with a pairwise ranking
 loss does: it reaches good configurations earliest offline, and online, with
 a stop after two batches without gain, it ships the same configurations in
-about half the search time, about 39\x{} faster than the original workflow.
+about half the search time. With a cheap confirmation of the finalists in
+batch replay and four GPUs, a kernel is tuned in about 105~s end to end,
+about 38\x{} faster than the original workflow.
 \end{abstract}
 
 \tableofcontents
@@ -1149,8 +1149,11 @@ miniFE l521. On l1201 the stop came slightly early (1.444\x{} against
 Promotions now account for half of the remaining time, at about 20~s each. The
 configuration that \code{combined-batch} shipped was its best screen in all 15
 runs, so promoting two configurations would ship the same results in about
-148~s per kernel, half the time of \code{tpe-batch} and about one sixth of the
-nominal time of TPE with 60 full evaluations. \code{tpe-batch} shipped its third
+148~s inside the search function, half the time of \code{tpe-batch} and about
+one sixth of the nominal time of TPE with 60 full evaluations. These times
+exclude the baseline measurement, classification, and model fitting before
+the search; end to end, a \code{combined-batch} run took 271~s
+(Section~\ref{sec:confirm}). \code{tpe-batch} shipped its third
 or fourth best screen in 6 of 15 runs, so it needs more promotions, because
 batch timings of short kernels are noisier.
 
@@ -1195,9 +1198,9 @@ reported speedups were wrong in both directions. On l844 it reported
 1.29\x{} for a configuration that is 2\% slower than the baseline, and on
 miniFE l290 it reported 1.15\x{} for a configuration with no gain. The final
 strategy, \code{combined-batch}, shipped configurations with a true speedup of
-1.53\x{} in 210~s per kernel, or about 148~s with two promotions, so it is
-about 19\x{} faster end to end (27\x{} with two promotions) and finds 10\%
-faster configurations. Its best screened configuration first reached the
+1.53\x{} in 271~s per kernel end to end (210~s inside the search function), so
+it is about 15\x{} faster end to end and finds 10\% faster configurations.
+Section~\ref{sec:confirm} reduces the end-to-end time to 105~s. Its best screened configuration first reached the
 original workflow's true speedup after a median of 9~s per kernel, against
 about 4000~s for the original workflow, on four of the five kernels. On l649
 it stayed about 3\% below the original result (2.50\x{} against 2.57\x{}),
@@ -1227,7 +1230,7 @@ miniFE l290 & 1.153 & 1.003 & 1.143 & 1.102 \\
 miniFE l521 & 1.453 & 1.662 & 1.671 & 1.670 \\
 \midrule
 Geometric mean & & 1.392 & 1.534 & 1.540 \\
-Time per kernel & & about 4000~s & 210~s (148~s) & 288~s \\
+Time per kernel (end to end) & & about 4000~s & 271~s & 309~s \\
 Time to reach the original's quality (median) & & about 4000~s & 9~s & 24~s \\
 \bottomrule
 \end{tabular}
@@ -1642,14 +1645,12 @@ rounds. Table~\ref{tab:rankonline} shows the result. With the patience stop,
 the ranking model shipped configurations as fast as \code{combined-batch}
 (1.527\x{} against 1.528\x{}, ratio 0.999 [0.974, 1.020]) and
 \code{tpe-batch} (ratio 0.995 [0.987, 1.004]), in 58~s of search instead of
-106~s and 103~s in total including two promotions. The stop fired in all 15
+106~s, and in 103~s inside the search function including two promotions
+(176~s end to end, Section~\ref{sec:confirm}). The stop fired in all 15
 runs, after 23~s to 131~s depending on the kernel. It was 2\% to 3\% better
 than \code{combined-batch} on l649 and l1201 and 5\% worse on miniFE l290
 (1.08\x{} against 1.14\x{}), where the speedups of the top screens differ by
-about the batch measurement noise. Against the original workflow of
-Section~\ref{sec:endtoend}, which took about 4000~s per kernel and shipped a
-true speedup of 1.39\x{} on these kernels, \code{rank-batch-patience} is
-about 39\x{} faster and ships 1.53\x{}.
+about the batch measurement noise.
 
 \begin{table}[t]
 \centering
@@ -1661,12 +1662,89 @@ with the baseline in the same five randomized rounds for all methods.}
 \small
 \begin{tabular}{lrrrr}
 \toprule
-Strategy & Shipped speedup & Search time & Total time & Screens \\
+Strategy & Shipped speedup & Search time & In search & Screens \\
 \midrule
 \code{tpe-batch} & 1.535 & -- & 288~s (5 promotions) & 239 \\
 \code{combined-batch} & 1.528 & 106~s & 210~s (5 promotions) & 112 \\
 \code{rank-batch} (GP stop) & 1.521 & 168~s & 214~s (2 promotions) & 191 \\
 \code{rank-batch-patience} & 1.527 & 58~s & 103~s (2 promotions) & 62 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Cheaper confirmation, several GPUs, and end-to-end time}
+\label{sec:confirm}
+After the patience stop, the two full measurements of the promoted
+configurations took 45~s of the 103~s inside the search, and measuring the
+baseline, classifying the kernel, and training the ranking models took about
+another 70~s before the search began. Until now we reported times inside the
+search function. Here we also report the end-to-end time of each run, from
+the start of tuning a kernel to the shipped configuration, which includes
+these steps. The end-to-end time of the original workflow, about 4000~s per
+kernel, was measured the same way (Section~\ref{sec:endtoend}).
+
+We made two changes to the tuner. The first is a cheaper \emph{batch
+confirmation}. Instead of two full measurements, the three best screens are
+re-timed with three interleaved repetitions each in one batch replay per
+binary, next to the default configuration timed three times in batch mode on
+the same GPU, and the tuner ships the configuration with the best speedup
+over that default. Both sides of each speedup are therefore timed in the same
+regime on the same GPU, which cancels the 1\% bias of batch timings on short
+kernels (Section~\ref{sec:batch}). The second change uses several GPUs. Each
+GPU replays in its own working directory, which links to the recording and
+holds its own compiled image, and the replays run in forked processes, each
+restricted to one GPU. Each batch of 16 candidates is dealt to the GPUs in
+turn, and the timings of each GPU are scaled to those of the first GPU with a
+factor from the default configuration timed in batch mode on every GPU (the
+four T4 GPUs differed by at most 0.4\%). The baseline measurement and the
+classification samples also run on three GPUs at once, but only the first
+GPU's timings enter the baseline. We ran \code{rank-batch-patience} with batch
+confirmation on one GPU (\code{rank-confirm}) and on four GPUs
+(\code{rank-confirm-4gpu}) on the same five kernels with three seeds, and
+re-measured the shipped configurations of all five strategies with the
+baseline in the same five randomized rounds.
+
+Table~\ref{tab:confirm} shows the result. The batch confirmation took 12~s
+instead of 45~s and shipped configurations at least as fast as the full
+measurements (ratio 1.003 [1.000, 1.007] over \code{rank-batch-patience}).
+With it, a kernel took 140~s end to end on one GPU, against 176~s with full
+measurements and 271~s for \code{combined-batch}, at the same quality (ratio
+1.003 [0.976, 1.025] over \code{combined-batch}). Four GPUs reduced the end-to-end
+time to 105~s, but only through the measurements before the search, which
+fell from about 70~s to about 33~s. The search itself took 60~s on four GPUs
+and 58~s on one. Splitting a batch of 16 among four replay processes saves
+about 0.5~s per configuration, but every process pays the fixed cost of
+loading the recording and warming up the GPU, and the per-GPU calibration
+adds about 6~s, which cancels the saving. Several GPUs are more useful for
+tuning different kernels at the same time, as our experiment drivers do, or
+for screening a full batch on each GPU.
+
+Against the original workflow, which took about 4000~s per kernel end to end
+and shipped a true speedup of 1.39\x{}, the final tuner is about 29\x{}
+faster on one GPU and 38\x{} faster on four, and it ships 1.53\x{}. Of the
+105~s, about 33~s are spent before the search, 60~s in the search, and 12~s
+in the confirmation.
+
+\begin{table}[t]
+\centering
+\caption{Batch confirmation and four GPUs against the earlier batch strategies
+(five kernels, three seeds, 300~s cap, no cache). Speedups are true speedups
+of the shipped configurations, all re-measured with the baseline in the same
+five randomized rounds. Times are means per run: search, confirmation or
+promotions, the total inside the search function, and the end-to-end time
+including the baseline measurement, classification, and model training.}
+\label{tab:confirm}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lrrrrr}
+\toprule
+Strategy & Shipped & Search & Confirmation & In search & End to end \\
+\midrule
+\code{tpe-batch} & 1.531 & -- & -- & 288~s & 309~s \\
+\code{combined-batch} & 1.527 & 106~s & 104~s (5 full) & 210~s & 271~s \\
+\code{rank-batch-patience} & 1.527 & 58~s & 45~s (2 full) & 103~s & 176~s \\
+\code{rank-confirm} & 1.531 & 58~s & 12~s (batch) & 70~s & 140~s \\
+\code{rank-confirm-4gpu} & 1.528 & 60~s & 12~s (batch) & 73~s & 105~s \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -1686,9 +1764,10 @@ answer to the second question is that, once measurements are clean, the
 choice among model-based search algorithms matters little, while the choice
 of model features, initial design, budget, stopping rule, and above all the
 cost of each evaluation matters more. Together, these changes made tuning
-about 19\x{} faster than the original workflow and improved the true speedup
-of the shipped configurations from 1.39\x{} to 1.53\x{} on the five kernels
-that we compared end to end (Section~\ref{sec:endtoend}).
+about 38\x{} faster end to end than the original workflow on four GPUs (29\x{}
+on one) and improved the true speedup of the shipped configurations from
+1.39\x{} to 1.53\x{} on the five kernels that we compared end to end
+(Sections~\ref{sec:endtoend} and~\ref{sec:confirm}).
 
 We recommend the following changes to the tuner, in order of expected
 benefit per unit of effort.
@@ -1697,7 +1776,10 @@ benefit per unit of effort.
   across kernels, screen them in batches, and stop after two batches without
   gain (\code{rank-batch} with \code{patience}~2,
   Section~\ref{sec:learnedtransfer}), which ships the same configurations as
-  the strategy of the next item in about half the search time.
+  the strategy of the next item in about half the search time. Confirm the
+  three best screens in batch replay next to the default on the same GPU, and
+  run the measurements before the search on several GPUs
+  (Section~\ref{sec:confirm}).
 \item Screen candidates with in-process batch replay (Section~\ref{sec:batch}),
   which made each screen about eight times cheaper, stop when the model's
   expected improvement falls below the measurement noise, and confirm the
@@ -1780,7 +1862,11 @@ online runs (\code{analysis.log}, \code{analysis2.log},
 changes are \code{RankTransferSearcher} in \code{RRUtil/Search.py} and the
 \code{rank-batch}, \code{rank-rgpe-batch}, and \code{patience} options in
 \code{RRUtil/Benchmark.py}. XGBoost~2.1.4 (\code{xgboost-cpu}) was installed
-in that directory's \code{pylib}.
+in that directory's \code{pylib}. The batch confirmation and the multi-GPU replays of
+Section~\ref{sec:confirm} are commit \code{96aac7c74} (options \code{confirm}
+and \code{devices} of \code{Kernel.Search}), with the runs in
+\code{learned-transfer-2026-10-13/online/mgpu} (\code{orchestrate.sh},
+\code{analyze\_mgpu.py}, \code{analysis.log}).
 Optuna~3.6.1 is not part of the container, and the studies installed it in an
 experiment-local directory on \code{PYTHONPATH}. Table~\ref{tab:env} lists the
 environment variables that control the new behavior.
