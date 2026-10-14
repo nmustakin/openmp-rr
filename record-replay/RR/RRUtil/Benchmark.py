@@ -589,7 +589,10 @@ class Kernel:
                          screens (options['ei_stop'])
           rank-rgpe-batch  rank-batch for the first 5 screens, then a
                          ranking-weighted GP ensemble (RGPE)
-        Batch strategies also accept options['patience'] (batches without a
+        Batch strategies also accept options['devices'] (CUDA ordinals to
+        split each batch across), options['confirm'] = 'batch' (re-time the
+        `promote` best screens in batch replay next to the default instead of
+        full measurements), and options['patience'] (batches without a
         relative gain above options['patience_tol'], default 0.002, before
         stopping).
         """
@@ -608,6 +611,26 @@ class Kernel:
         def measure(config, screen=False):
             return self.sample(Tries=self.TimingTries, Screen=screen, **config)
 
+        devices = list(options.get('devices') or [0])
+        classifying = algorithm in ('adaptive', 'tpe-portfolio', 'trees-prior', 'transfer-model',
+                                    'combined', 'combined-batch', 'rank-batch', 'rank-rgpe-batch')
+        if self.getDefaultKey() not in db and len(devices) > 1 and classifying:
+            # Measure the default and its extra classification samples on several
+            # GPUs at once. Only device 0's timings enter the baseline; the other
+            # GPUs contribute metrics for classification.
+            def measure_default():
+                r = measure({})
+                return r + (dict(getattr(self, 'LastMetrics', {})),)
+            n = min(len(devices), self.ClassifySamples)
+            res = self._run_on_devices([(d, measure_default) for d in devices[:n]])
+            Valid, SStats, DStats, Duration, Energy, GLoads, GStores, M0 = res[0]
+            db.Add(self.getDefaultKey(), [SStats], DStats, [Duration], [Energy],
+                   [GLoads], [GStores], Valid)
+            if Valid:
+                db.SetMetrics(self.getDefaultKey(), M0)
+                db.Data[self.getDefaultKey()]['metrics_samples'] = (
+                    [M0] + [r[7] for r in res[1:] if r[0]])
+                db.Update()
         if self.getDefaultKey() not in db:
             Valid, SStats, DStats, Duration, Energy, GLoads, GStores = measure({})
             db.Add(self.getDefaultKey(), [SStats], DStats, [Duration], [Energy],
@@ -617,8 +640,7 @@ class Kernel:
         base_metrics = db.Data.get(self.getDefaultKey(), {}).get('metrics', {})
 
         klass = None
-        if algorithm in ('adaptive', 'tpe-portfolio', 'trees-prior', 'transfer-model',
-                         'combined', 'combined-batch', 'rank-batch', 'rank-rgpe-batch'):
+        if classifying:
             # Classify from the median of several baseline metric samples; a
             # single profiled launch can be power-throttled.
             samples = db.Data[self.getDefaultKey()].get('metrics_samples', [base_metrics])
@@ -745,6 +767,8 @@ class Kernel:
         # ~25 s of real time on T4, more than its nominal timing cost.
         promote_cost = 25.0 if wall_budget else self.COST_PROMOTE
         reserve = (options.get('promote', 5) * promote_cost) if fidelity != 'full' else 0.0
+        if options.get('confirm') == 'batch':
+            reserve = 15.0
         t_start = time.perf_counter()
         step = 0
 
@@ -767,6 +791,21 @@ class Kernel:
             patience_tol = options.get('patience_tol', 0.002)
             batch_best = []
             stop_reason = 'budget'
+            # Several GPUs (options['devices'], CUDA ordinals): each batch is split
+            # across them, one replay process per GPU and binary, each in its own
+            # directory. Timings are mapped to device 0's scale with a factor
+            # from the default configuration timed in batch mode on every GPU.
+            devices = list(options.get('devices') or [0])
+            scale = {d: 1.0 for d in devices}
+            if len(devices) > 1:
+                base_runs = self.sample_batch_parallel(
+                    [(d, [[dict(NumThreads=None, NumTeams=None)] * 3]) for d in devices])
+                base_t = {d: float(np.median([t for v, t in r[0] if v]))
+                          for d, r in zip(devices, base_runs)}
+                scale = {d: base_t[devices[0]] / base_t[d] for d in devices}
+                db.MetaData['device_scale'] = {str(d): scale[d] for d in devices}
+                print('Device timing scale: ' + ', '.join(f'{d}: {scale[d]:.4f}' for d in devices),
+                      flush=True)
             while budget_left(unit * q):
                 groups = {}
                 for point, trial in searcher.ask_many(q):
@@ -788,10 +827,31 @@ class Kernel:
                     binary = table.get((config['MaxThreads'], config['MinTeams']))
                     rep = reps.get(binary, (config['MaxThreads'], config['MinTeams']))
                     groups.setdefault(rep, []).append((point, trial, config, key))
-                for rep, items in groups.items():
-                    results = self.sample_batch(
-                        [dict(MaxThreads=rep[0], MinTeams=rep[1], NumThreads=c['NumThreads'],
-                              NumTeams=c['NumTeams']) for _, _, c, _ in items], deviceID=device)
+                screened = []
+                if len(devices) > 1:
+                    # Deal the batch's configurations round-robin to the GPUs,
+                    # then group each GPU's share by binary.
+                    flat = [(rep, it) for rep, items in groups.items() for it in items]
+                    n_dev = max(1, min(len(devices), len(flat) // 2))
+                    shares = {d: {} for d in devices[:n_dev]}
+                    for i, (rep, it) in enumerate(flat):
+                        shares[devices[i % n_dev]].setdefault(rep, []).append(it)
+                    jobs = [(d, [[dict(MaxThreads=rep[0], MinTeams=rep[1],
+                                       NumThreads=c['NumThreads'], NumTeams=c['NumTeams'])
+                                  for _, _, c, _ in items] for rep, items in share.items()])
+                            for d, share in shares.items() if share]
+                    outs = self.sample_batch_parallel(jobs)
+                    for (d, _), res, share in zip(jobs, outs, [s for s in shares.values() if s]):
+                        for items, results in zip(share.values(), res):
+                            screened.append((items, [(v, t * scale[d] if v else t)
+                                                     for v, t in results]))
+                else:
+                    for rep, items in groups.items():
+                        screened.append((items, self.sample_batch(
+                            [dict(MaxThreads=rep[0], MinTeams=rep[1], NumThreads=c['NumThreads'],
+                                  NumTeams=c['NumTeams']) for _, _, c, _ in items],
+                            deviceID=device)))
+                for items, results in screened:
                     for (point, trial, config, key), (valid, dur) in zip(items, results):
                         db.Add(key, [None], [[]], [[dur]] if valid else [[]],
                                [[float('nan')]], [None], [None], valid)
@@ -878,7 +938,58 @@ class Kernel:
             step += 1
 
         shipped = None
-        if fidelity in ('mf', 'batch'):
+        if fidelity == 'batch' and options.get('confirm') == 'batch':
+            # Cheap confirmation: re-time the best screens with `confirm_repeats`
+            # interleaved repetitions in one batch replay per binary, next to the
+            # default configuration timed the same way on the same GPU, and ship
+            # the best within-GPU speedup. Binaries run on separate GPUs when
+            # several are given.
+            rows = sorted(((db.Speedup(k), k) for k in {t['key'] for t in trace}
+                           if db.Data[k]['valid']), reverse=True)[:options.get('confirm_top', 3)]
+            reps_n = options.get('confirm_repeats', 3)
+            by_bin = {}
+            for _, k in rows:
+                config = {name: int(v) for name, v in (p.split('=') for p in k.split('-'))
+                          if name != 'DeviceID' and v != 'None'}
+                by_bin.setdefault((config['MaxThreads'], config['MinTeams']), []).append((k, config))
+            devices = list(options.get('devices') or [0])
+            # One process per GPU: each GPU times the default and its binaries' candidates.
+            plan = {}                                   # device -> [(binary entries)]
+            for i, entries in enumerate(by_bin.items()):
+                plan.setdefault(devices[i % len(devices)], []).append(entries)
+            jobs = []
+            for d, bins in plan.items():
+                groups = [[dict(NumThreads=None, NumTeams=None)] * reps_n]
+                for (mt, mn), entries in bins:
+                    groups.append([dict(MaxThreads=mt, MinTeams=mn, NumThreads=c['NumThreads'],
+                                        NumTeams=c['NumTeams']) for _, c in entries] * reps_n)
+                jobs.append((d, groups))
+            outs = (self.sample_batch_parallel(jobs) if len(jobs) > 1 or devices != [0]
+                    else [[self.sample_batch(g, deviceID=device) for g in jobs[0][1]]])
+            confirmed = {}
+            for (d, bins), res in zip(plan.items(), outs):
+                base_t = [t for v, t in res[0] if v]
+                if not base_t:
+                    continue
+                for ((_, entries), times) in zip(bins, res[1:]):
+                    n = len(entries)
+                    for j, (k, _) in enumerate(entries):
+                        ts = [t for v, t in times[j::n] if v]
+                        if ts:
+                            confirmed[k] = float(np.median(base_t) / np.median(ts))
+            for k, sp in confirmed.items():
+                db.Data[k]['confirmed_speedup'] = sp
+                db.Data[k]['fidelity'] = 'confirmed'
+                trace.append({'step': step, 'key': k, 'source': 'confirm', 'class': klass,
+                              'cost': spent, 'wall': time.perf_counter() - t_start,
+                              'speedup': sp, 'energy_gain': float('nan')})
+                step += 1
+            db.Update()
+            if confirmed:
+                shipped = max(confirmed, key=confirmed.get)
+                print(f'Confirmed: ' + ', '.join(f'{sp:.4f}' for sp in sorted(
+                    confirmed.values(), reverse=True)) + f'; shipping {shipped}', flush=True)
+        elif fidelity in ('mf', 'batch'):
             # Promote the best screens to a full measurement and ship among them.
             rows = [(db.Speedup(k), k) for k in {t['key'] for t in trace}
                     if db.Data[k]['valid']]
@@ -910,6 +1021,66 @@ class Kernel:
     # Re-warm time (ms) before each configuration after the first one in a
     # batch replay; the GPU is already at a steady clock.
     BatchRewarmMs = int(os.environ.get('RR_BATCH_REWARM_MS', 100))
+
+    def _device_workdir(self, d):
+        """A per-GPU subdirectory of the work directory with links to the recording,
+        so that concurrent replays compile and read their own kernel image."""
+        base = os.getcwd()
+        sub = os.path.join(base, f'dev{d}')
+        os.makedirs(sub, exist_ok=True)
+        for f in glob.glob(os.path.join(base, f'{self.HashName}.*')):
+            if f.endswith(('.json', '.memory', '.globals', '.output', '.image.orig')):
+                dst = os.path.join(sub, os.path.basename(f))
+                if not os.path.lexists(dst):
+                    os.symlink(os.path.realpath(f), dst)
+        return sub
+
+    def sample_batch_parallel(self, jobs):
+        """Run batch replays on several GPUs at once.
+
+        `jobs` is a list of (device ordinal, [configs, configs, ...]); each inner
+        list shares one binary and is timed with sample_batch. Each job runs in a
+        forked process with CUDA_VISIBLE_DEVICES restricted to its GPU and its own
+        working directory. Returns, per job, the list of sample_batch results.
+        """
+        def fallback(groups):
+            return [[(False, None)] * len(g) for g in groups]
+        return self._run_on_devices(
+            [(d, (lambda g=groups: [self.sample_batch(x, deviceID=0) for x in g])) for d, groups in jobs],
+            fallbacks=[(lambda g=groups: fallback(g)) for _, groups in jobs])
+
+    def _run_on_devices(self, jobs, fallbacks=None):
+        """Run callables concurrently, one forked process per (device ordinal, fn),
+        each with CUDA_VISIBLE_DEVICES restricted to its GPU and its own working
+        directory (device ordinals must be distinct). Returns the results in order."""
+        import multiprocessing as mp
+        assert len({d for d, _ in jobs}) == len(jobs), 'one job per device'
+        ctx = mp.get_context('fork')
+        visible = [v.strip() for v in os.environ.get('CUDA_VISIBLE_DEVICES', '').split(',')
+                   if v.strip()]
+        dirs = {d: self._device_workdir(d) for d, _ in jobs}
+        queue = ctx.Queue()
+
+        def run(i, d, fn):
+            try:
+                os.chdir(dirs[d])
+                os.environ['CUDA_VISIBLE_DEVICES'] = visible[d] if visible else str(d)
+                pynvml.nvmlInit()
+                queue.put((i, True, fn()))
+            except Exception as e:          # report, do not hang the parent
+                print(f'Replay on device {d} failed: {e!r}', flush=True)
+                queue.put((i, False, None))
+
+        procs = [ctx.Process(target=run, args=(i, d, fn)) for i, (d, fn) in enumerate(jobs)]
+        for p in procs:
+            p.start()
+        out = [None] * len(jobs)
+        for _ in jobs:
+            i, ok, res = queue.get()
+            out[i] = res if ok else (fallbacks[i]() if fallbacks else None)
+        for p in procs:
+            p.join()
+        return out
 
     def sample_batch(self, configs, deviceID=0):
         """Time several launch configurations of one binary in one replay process.
