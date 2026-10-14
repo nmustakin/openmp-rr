@@ -69,7 +69,11 @@ per kernel instead of about 15 for Bayesian optimization with 60 full
 evaluations. Against the workflow we started from, which took about 67
 minutes per kernel and shipped configurations with a true speedup of
 1.39\x{}, the final strategy is about 19\x{} faster end to end and ships
-1.53\x{}.
+1.53\x{}. A search policy learned with reinforcement learning does not beat a
+transferred cost model, but training that cost model with a pairwise ranking
+loss does: it reaches good configurations earliest offline, and online, with
+a stop after two batches without gain, it ships the same configurations in
+about half the search time, about 39\x{} faster than the original workflow.
 \end{abstract}
 
 \tableofcontents
@@ -128,6 +132,11 @@ In this work, we make the following contributions:
   transfers better between applications than the transfer model, but within
   the same applications the transfer model remains better
   (Section~\ref{sec:rl}).
+\item We show that a cost model trained with a pairwise ranking loss
+  transfers across kernels and applications better than a regression model,
+  a ranking-weighted GP ensemble, and the learned policy, and that with a
+  patience stop it halves the search time online at the same quality
+  (Section~\ref{sec:learnedtransfer}).
 \end{itemize}
 
 %=============================================================================
@@ -1457,6 +1466,212 @@ landscapes have one batch timing per configuration, with a noise of about
 that an online search could propose.
 
 %=============================================================================
+\section{Learned transfer with ranking and ensembles}
+\label{sec:learnedtransfer}
+
+The learned policy of Section~\ref{sec:rl} showed that the main weakness of
+transferring knowledge across kernels is a wrong prior: the transfer cost model
+predicts gains in regions that suit other kernels, and it generalized poorly
+from LULESH to miniFE. We therefore tested three methods from the literature
+that address this weakness more directly, on the same exhaustive landscapes,
+folds, and score as Section~\ref{sec:rl}, and then evaluated the best one
+online.
+
+\subsection{Methods}
+\begin{itemize}
+\item \code{rgpe}, the \emph{ranking-weighted Gaussian process ensemble}
+  (RGPE)~\cite{feurer2018rgpe}. It keeps one GP per training kernel, fitted
+  to 300 random configurations of that kernel's landscape with the log
+  speedup standardized per kernel, and one GP on the test kernel's own
+  observations. Each model receives a weight equal to the fraction of 256
+  posterior samples in which it has the fewest \emph{misranked pairs}, that
+  is, pairs of observed configurations whose order the model predicts wrongly.
+  The test kernel's own GP is scored with leave-one-out predictions, so that
+  it cannot win by memorizing the observations. Training models whose median
+  loss exceeds the 95th percentile of the own model's loss receive weight
+  zero. The ensemble mean is the weighted sum of the models' means, its
+  variance is the sum of the variances weighted by the squared weights, and
+  the next configuration maximizes EI. Training kernels that rank the new
+  kernel's observations badly thus lose their influence after a few
+  evaluations. Before two observations, it follows the equally weighted mean
+  of the training models.
+\item \code{transfer\_rank}, a cost model trained with a \emph{pairwise
+  ranking loss} instead of a regression loss, as in AutoTVM~\cite{chen2018autotvm}.
+  A regression model predicts each configuration's log speedup, so kernels
+  with large speedups (2.5\x{} on l649) dominate kernels with small ones
+  (1.07\x{} on miniFE l210), although a tuner only needs the order of the
+  configurations. We trained XGBoost~\cite{chen2016xgboost} with the
+  \code{rank:pairwise} objective~\cite{burges2010ranknet}, which penalizes
+  pairs of configurations of the same kernel that the model orders wrongly,
+  with one group per training kernel and the configuration's percentile
+  within its kernel (32 grades) as the relevance label. Eight models are
+  trained on bootstrap samples of the training kernels. At every step each
+  is fine-tuned with 20 additional trees on the test kernel's own
+  observations, graded by their rank. The scores of each model are
+  standardized, and the next configuration maximizes their mean plus their
+  standard deviation over the eight models, an upper confidence bound in
+  which the disagreement between models stands in for uncertainty. The
+  features are those of the transfer cost model.
+\item \code{wave\_blr}, a model of the launch configuration's \emph{wave}
+  structure in the spirit of WaveTune~\cite{zhang2026wavetune}, which
+  observed that kernel time is piecewise bilinear between wave boundaries. A
+  \emph{wave} is one round of thread blocks that fills every SM, so the
+  number of waves is the number of teams divided by the number of blocks that
+  the GPU holds at once. We fitted Bayesian ridge regression on the kernel's
+  own observations with a term per binary, the logarithms of the thread count
+  and teams fraction and their product, the fill of the last wave, the
+  occupancy, and for each wave bucket ($\lfloor \log_2 \text{waves}
+  \rfloor$, clipped to $[-4, 6]$) an offset and slopes in the two
+  logarithms. The first five configurations are \emph{anchors} spread over
+  the wave buckets. It uses no other kernels.
+\item \code{rank\_rgpe}, a hybrid: \code{transfer\_rank} for the first five
+  proposals, then RGPE with the fine-tuned ranker as one more ensemble
+  member (its standardized mean score and the spread of the eight models as
+  uncertainty). \code{rank\_then\_rgpe} is the same without the ranker in the
+  ensemble.
+\end{itemize}
+
+\subsection{Offline results}
+Table~\ref{tab:learned} and Figure~\ref{fig:learned} show the share of the
+optimum. The ranking model was the most consistent method. In LOKO it was the
+best or tied for the best at every number of evaluations (0.641 after one,
+0.908 after ten, and 0.981 after 30), significantly better than the learned
+policy at every number of evaluations (+0.145 [+0.068, +0.234] after ten) and
+than GP-EI after 1, 5, and 10. Its advantage over the regression transfer
+model was +0.176 after one evaluation and +0.074 [$-$0.005, +0.172] after ten
+in LOKO. Across applications, the regression model collapsed and the ranking
+model did not. Trained on miniFE and tested on LULESH it was better by +0.211
+[+0.036, +0.391] after ten evaluations, and trained on LULESH and tested on
+miniFE by +0.209 [+0.006, +0.478] after 30. It found the optimum of l1080
+quickly (0.856 after ten, against 0.525), a register-bound kernel that the
+regression model and the learned policy had mispredicted.
+
+RGPE started badly (0.172 after one evaluation in LOKO), because the equally
+weighted mean of the training models is a weak prior. Once it had a few
+observations, the weights moved to the models that rank the kernel correctly,
+and the weight of the kernel's own GP rose from about 0.1 after three
+evaluations to 0.3 to 0.56 after ten. It became the best method late in the
+search in LOKO (0.885 after ten and 0.997 after 30, +0.038 [+0.011, +0.073]
+over GP-EI after 30) and solved the reductions that every earlier method
+struggled with (l1201 0.980 and miniFE l290 1.000 after ten evaluations).
+From LULESH to miniFE, however, no LULESH model ranked the miniFE kernels
+well, and RGPE reached only 0.554 after ten. The wave model beat TPE but not
+GP-EI on the same kernel's observations, so the explicit wave structure did
+not help at these budgets.
+
+Neither hybrid was consistently better than the ranking model alone. After ten
+evaluations, \code{rank\_rgpe} was slightly worse in LOKO ($-$0.025 [$-$0.091,
++0.023]) and slightly better from miniFE to LULESH (+0.026 [+0.008, +0.043]),
+and \code{rank\_then\_rgpe} was much better from LULESH to miniFE (0.991,
++0.192 [+0.023, +0.440]) but much worse in the reverse direction ($-$0.110
+[$-$0.185, $-$0.042]). Online, the per-kernel GPs of RGPE would also add about
+70~s of fitting before the first batch. We therefore evaluated the ranking
+model alone online.
+
+\begin{table}[t]
+\centering
+\caption{Mean share of the optimum log speedup after $n$ evaluations on the
+exhaustive landscapes for the transfer methods of this section, with the
+reference methods of Table~\ref{tab:rl} (kernels with an optimum above
+1.05\x{}; folds as in Table~\ref{tab:rl}). The best value in each column is
+in bold.}
+\label{tab:learned}
+\small
+\begin{tabular}{lrrrrrrrr}
+\toprule
+& \multicolumn{4}{c}{LOKO} & \multicolumn{2}{c}{L$\to$M} & \multicolumn{2}{c}{M$\to$L} \\
+\cmidrule(lr){2-5}\cmidrule(lr){6-7}\cmidrule(lr){8-9}
+Method & $n=1$ & 5 & 10 & 30 & 5 & 10 & 5 & 10 \\
+\midrule
+\code{tpe} & 0.218 & 0.474 & 0.590 & 0.900 & 0.615 & 0.684 & 0.356 & 0.512 \\
+\code{gp\_ei} & 0.275 & 0.514 & 0.811 & 0.958 & 0.635 & 0.903 & 0.414 & 0.735 \\
+\code{transfer\_ei} & 0.465 & 0.735 & 0.834 & 0.966 & 0.599 & 0.627 & 0.453 & 0.591 \\
+\code{rl\_hybrid} & 0.351 & 0.637 & 0.763 & 0.916 & \textbf{0.741} & 0.804 & 0.494 & 0.656 \\
+\code{rgpe} & 0.172 & 0.622 & 0.885 & \textbf{0.997} & 0.367 & 0.554 & 0.394 & 0.820 \\
+\code{transfer\_rank} & \textbf{0.641} & \textbf{0.755} & \textbf{0.908} & 0.981 & 0.733 & 0.798 & \textbf{0.545} & 0.802 \\
+\code{wave\_blr} & 0.187 & 0.563 & 0.743 & 0.897 & 0.639 & 0.801 & 0.500 & 0.695 \\
+\code{rank\_then\_rgpe} & \textbf{0.641} & \textbf{0.755} & 0.845 & 0.977 & 0.733 & \textbf{0.991} & \textbf{0.545} & 0.692 \\
+\code{rank\_rgpe} & \textbf{0.641} & \textbf{0.755} & 0.884 & 0.980 & 0.733 & 0.760 & \textbf{0.545} & \textbf{0.827} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{learned}
+\caption{Mean share of the optimum log speedup against the number of
+evaluations on the exhaustive landscapes for the transfer methods of
+Section~\ref{sec:learnedtransfer}, with GP-EI, the regression transfer model,
+and the learned policy for reference.}
+\label{fig:learned}
+\end{figure}
+
+\subsection{Online evaluation}
+We added the ranking model to the tuner as \code{RankTransferSearcher} and
+the strategy \code{rank-batch}. Like \code{combined-batch}
+(Section~\ref{sec:combinedbatch}), it screens batches of 16 candidates with
+batch replay, uses the measurements of the other kernels as training data
+(leaving the tuned kernel out), and gives the two best screens the standard
+measurement. It uses no portfolio and no prior, because the ranking model
+already proposes good first batches. Ranker scores are not in units of
+speedup, so the convergence stop of \code{combined-batch} cannot be used as
+it is. We first used the largest EI of a GP fitted to the kernel's own screens,
+computed from 32 screens on, with the same threshold of 0.002. We ran the
+same five kernels with three seeds, a 300~s cap, and no cache, and re-measured
+the shipped configurations of all compared methods together with the baseline
+in the same five randomized rounds.
+
+\code{rank-batch} shipped configurations as fast as \code{combined-batch}
+(1.523\x{} against 1.521\x{}, ratio 1.001 [0.977, 1.021]) and reached good
+configurations sooner. Its best screen reached 98\% of the best screen that
+any run found on the kernel in 10 of 15 runs, against 7 for
+\code{combined-batch}, and on l1201 it did so after a median of 8~s, while
+\code{combined-batch} never did. However, its search took 168~s instead of
+106~s, because the GP stop fired late and the 300~s cap ended 6 of 15 runs.
+We therefore replayed simpler stop rules on the recorded traces. A
+\emph{patience} rule, which stops after two consecutive batches that raise the
+best screen by no more than 0.2\%, would have stopped \code{rank-batch} after
+57~s on average and lost at most 0.6\% of its best screen. The same rule
+would lose up to 2\% on the \code{combined-batch} traces and up to 17\% on the
+\code{tpe-batch} traces, because TPE's early batches are poor and a pause in
+progress does not mean that it has converged.
+
+We then ran \code{rank-batch} with the patience stop online
+(\code{rank-batch-patience}) and validated all four methods together in new
+rounds. Table~\ref{tab:rankonline} shows the result. With the patience stop,
+the ranking model shipped configurations as fast as \code{combined-batch}
+(1.527\x{} against 1.528\x{}, ratio 0.999 [0.974, 1.020]) and
+\code{tpe-batch} (ratio 0.995 [0.987, 1.004]), in 58~s of search instead of
+106~s and 103~s in total including two promotions. The stop fired in all 15
+runs, after 23~s to 131~s depending on the kernel. It was 2\% to 3\% better
+than \code{combined-batch} on l649 and l1201 and 5\% worse on miniFE l290
+(1.08\x{} against 1.14\x{}), where the speedups of the top screens differ by
+about the batch measurement noise. Against the original workflow of
+Section~\ref{sec:endtoend}, which took about 4000~s per kernel and shipped a
+true speedup of 1.39\x{} on these kernels, \code{rank-batch-patience} is
+about 39\x{} faster and ships 1.53\x{}.
+
+\begin{table}[t]
+\centering
+\caption{The ranking cost model online against the batch strategies of
+Section~\ref{sec:combinedbatch} (five kernels, three seeds, 300~s cap, no
+cache). Speedups are true speedups of the shipped configurations, re-measured
+with the baseline in the same five randomized rounds for all methods.}
+\label{tab:rankonline}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Strategy & Shipped speedup & Search time & Total time & Screens \\
+\midrule
+\code{tpe-batch} & 1.535 & -- & 288~s (5 promotions) & 239 \\
+\code{combined-batch} & 1.528 & 106~s & 210~s (5 promotions) & 112 \\
+\code{rank-batch} (GP stop) & 1.521 & 168~s & 214~s (2 promotions) & 191 \\
+\code{rank-batch-patience} & 1.527 & 58~s & 103~s (2 promotions) & 62 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%=============================================================================
 \section{Discussion and recommendations}
 \label{sec:discussion}
 
@@ -1478,6 +1693,11 @@ that we compared end to end (Section~\ref{sec:endtoend}).
 We recommend the following changes to the tuner, in order of expected
 benefit per unit of effort.
 \begin{enumerate}
+\item Rank candidates with a cost model trained with a pairwise ranking loss
+  across kernels, screen them in batches, and stop after two batches without
+  gain (\code{rank-batch} with \code{patience}~2,
+  Section~\ref{sec:learnedtransfer}), which ships the same configurations as
+  the strategy of the next item in about half the search time.
 \item Screen candidates with in-process batch replay (Section~\ref{sec:batch}),
   which made each screen about eight times cheaper, stop when the model's
   expected improvement falls below the measurement noise, and confirm the
@@ -1501,7 +1721,8 @@ benefit per unit of effort.
   trade-off at no cost in speed.
 \end{enumerate}
 A search policy learned with reinforcement learning is not yet worth adding
-to the tuner. With 17 training kernels, it does not beat the transfer cost
+to the tuner, and neither is a ranking-weighted GP ensemble, which starts
+slowly and needs per-kernel models. With 17 training kernels, it does not beat the transfer cost
 model within the same applications, although it transfers better to a new
 application (Section~\ref{sec:rl}).
 
@@ -1551,7 +1772,15 @@ landscapes (\code{landscape/*.csv}), \code{rl\_tune.py} and
 \code{rl\_hybrid.py} run the offline comparison, and \code{analyze\_rl.py}
 and \code{analyze\_hybrid.py} compute the summaries and confidence
 intervals. PyTorch~2.4.1 (CPU) was installed in that directory's
-\code{pylib}.
+\code{pylib}. Section~\ref{sec:learnedtransfer} is in
+\code{learned-transfer-2026-10-13}: \code{learned\_transfer.py} and
+\code{analyze.py} for the offline comparison, and \code{online/} for the
+online runs (\code{analysis.log}, \code{analysis2.log},
+\code{time\_to\_quality.log}, \code{patience\_stop*.log}). The tuner
+changes are \code{RankTransferSearcher} in \code{RRUtil/Search.py} and the
+\code{rank-batch}, \code{rank-rgpe-batch}, and \code{patience} options in
+\code{RRUtil/Benchmark.py}. XGBoost~2.1.4 (\code{xgboost-cpu}) was installed
+in that directory's \code{pylib}.
 Optuna~3.6.1 is not part of the container, and the studies installed it in an
 experiment-local directory on \code{PYTHONPATH}. Table~\ref{tab:env} lists the
 environment variables that control the new behavior.

@@ -431,9 +431,38 @@ def fig_rl():
     save(fig, 'rl')
 
 
+# ---------------------------------------------------------------- 13. learned transfer
+def fig_learned():
+    R = f'{X}/rl-tuning-2026-10-13'
+    L = f'{X}/learned-transfer-2026-10-13'
+    r = pd.concat([pd.read_csv(f'{R}/rl_results.csv'), pd.read_csv(f'{R}/rl_hybrid_results.csv'),
+                   pd.read_csv(f'{L}/lt_results.csv'), pd.read_csv(f'{L}/lt_hybrid_results.csv')])
+    opt = {os.path.basename(p)[:-4]: pd.read_csv(p).speedup.max() for p in glob.glob(f'{R}/landscape/*.csv')}
+    r = r[r.kernel.map(opt) > 1.05]
+    methods = [('gp_ei', 'GP-EI'), ('transfer_ei', 'Transfer-EI'), ('rl_hybrid', 'RL + model inputs'),
+               ('rgpe', 'RGPE'), ('transfer_rank', 'Ranking model'), ('wave_blr', 'Wave model'),
+               ('rank_rgpe', 'Ranking, then RGPE')]
+    folds = [('loko', 'Leave one kernel out'), ('lulesh->minife', 'LULESH $\\to$ miniFE'),
+             ('minife->lulesh', 'miniFE $\\to$ LULESH')]
+    fig, axes = plt.subplots(1, 3, figsize=(TWO, 2.0), sharey=True)
+    for ax, (fold, title) in zip(axes, folds):
+        t = r[r.fold == fold].pivot_table(index='method', columns='n', values='share', aggfunc='mean')
+        for i, (m, label) in enumerate(methods):
+            if m in t.index:
+                ax.plot(t.columns, t.loc[m].values, color=SLOT[i], marker=MARK[i], markersize=3.5,
+                        markeredgecolor=SURF, markeredgewidth=0.5, label=label,
+                        linewidth=2.2 if m == 'transfer_rank' else 1.3)
+        ax.set_title(title, fontsize=7.5)
+        ax.set_xlabel('Evaluations', fontsize=7)
+        ax.set_xlim(1, 30); ax.set_ylim(0, 1.02)
+    axes[0].set_ylabel('Share of optimum\nlog speedup')
+    axes[0].legend(loc='lower right', fontsize=5.5, ncol=1)
+    save(fig, 'learned')
+
+
 if __name__ == '__main__':
     for f in [fig_clock_ramp, fig_winners_curse, fig_measurement, fig_anytime, fig_time_energy,
-              fig_dram, fig_classes, fig_meta_effect, fig_cost, fig_initial, fig_avenues, fig_rl]:
+              fig_dram, fig_classes, fig_meta_effect, fig_cost, fig_initial, fig_avenues, fig_rl, fig_learned]:
         try:
             f()
         except Exception as e:
