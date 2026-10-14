@@ -535,6 +535,179 @@ class TransferModelSearcher:
             self.own_y.append(v)
 
 
+def rank_grades(y, levels=32):
+    """Percentile grades 0..levels-1 of y (ranking labels, scale-free across kernels)."""
+    import numpy as np
+    import pandas as pd
+    r = pd.Series(y).rank(pct=True).values
+    return np.minimum((r * levels).astype(int), levels - 1)
+
+
+# Scale of the geometric transfer features for Gaussian processes (trees ignore it).
+GP_SCALE = [10.0, 8.0, 255.0, 10.0, 1.0, 10.0, 1.0]
+
+
+class RankTransferSearcher(TransferModelSearcher):
+    """Pairwise-ranking cost model across kernels, optionally followed by RGPE.
+
+    Bagged XGBoost rankers (rank:pairwise) are trained on the other kernels'
+    measurements in `pool`, one query group per kernel with percentile grades
+    as relevance, so every kernel counts equally whatever its speedup range.
+    Before each batch, every ranker is fine-tuned with a few trees on this
+    kernel's own observations. Candidates (the same deduplicated set as
+    TransferModelSearcher) are ranked by mean + std of the z-scored ranker
+    outputs. With `rgpe`, after `switch` own observations the acquisition is the
+    expected improvement of a ranking-weighted GP ensemble (Feurer et al.
+    2018): one GP per other kernel, the fine-tuned ranker, and a GP on this
+    kernel's observations, weighted by how often each ranks the observations
+    best. `last_max_ei` is the largest expected improvement in log speedup of a
+    GP on the kernel's own observations (inf before `min_obs` observations),
+    for the convergence stop, since ranker scores are not in speedup units.
+    Offline evaluation: experiment-archives/learned-transfer-2026-10-13.
+    """
+
+    def __init__(self, bounds, seed, objectives, pool, target_kid, klass, table, trip_count,
+                 rgpe=False, switch=5, bags=8, min_obs=32, rounds=150):
+        import numpy as np
+        import xgboost as xgb
+        super().__init__(bounds, seed, objectives, pool, target_kid, klass, table, trip_count)
+        self.xgb, self.rgpe, self.switch, self.min_obs = xgb, rgpe, switch, min_obs
+        self.rng = np.random.default_rng(seed)
+        other = pool[(pool.kid != target_kid) & (pool.speedup > 0)]
+        groups = [(transfer_frame(g), np.log(g.speedup.values)) for _, g in other.groupby('kid')]
+        self.models = []
+        for b in range(bags):
+            pick = self.rng.choice(len(groups), len(groups), replace=True)
+            X = np.vstack([groups[i][0] for i in pick])
+            y = np.concatenate([rank_grades(groups[i][1]) for i in pick])
+            q = np.concatenate([np.full(len(groups[i][1]), j) for j, i in enumerate(pick)])
+            p = dict(objective='rank:pairwise', eta=0.1, max_depth=6, subsample=0.8,
+                     lambdarank_pair_method='mean', lambdarank_num_pair_per_sample=8,
+                     nthread=2, seed=int(seed * 100 + b), verbosity=0)
+            self.models.append((xgb.train(p, xgb.DMatrix(X, label=y, qid=q),
+                                          num_boost_round=rounds), p))
+        self.dc = xgb.DMatrix(self.Xc)
+        self.base_scores = np.array([m.predict(self.dc) for m, _ in self.models])
+        self.Gc = self.Xc[:, :7] / np.array(GP_SCALE)
+        if rgpe:
+            mus, sds = [], []
+            for X, y in groups:
+                idx = self.rng.choice(len(y), min(300, len(y)), replace=False)
+                gp = self._fit_gp(X[idx, :7] / np.array(GP_SCALE), self._std(y)[idx])
+                mu, sd = gp.predict(self.Gc, return_std=True)
+                mus.append(mu); sds.append(np.maximum(sd, 1e-6))
+            self.BM, self.BS = np.array(mus), np.array(sds)
+        self.last_weights = None
+        self.own_idx = []
+
+    @staticmethod
+    def _std(y):
+        s = y.std()
+        return (y - y.mean()) / (s if s > 1e-9 else 1.0)
+
+    @staticmethod
+    def _fit_gp(X, y):
+        from sklearn.gaussian_process import GaussianProcessRegressor
+        from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
+        return GaussianProcessRegressor(ConstantKernel() * Matern(nu=2.5) + WhiteKernel(1e-3),
+                                        normalize_y=False, random_state=0).fit(X, y)
+
+    @staticmethod
+    def _ei(mu, sd, best):
+        import numpy as np
+        from scipy.stats import norm
+        sd = np.maximum(sd, 1e-9)
+        z = (mu - best) / sd
+        return (mu - best) * norm.cdf(z) + sd * norm.pdf(z)
+
+    def _rank_z(self):
+        np, xgb = self.np, self.xgb
+        if len(self.own_y) >= 2:
+            g = rank_grades(np.array(self.own_y), levels=len(self.own_y))
+            d = xgb.DMatrix(np.array(self.own_X), label=g, qid=np.zeros(len(g), int))
+            sc = np.array([xgb.train(dict(p, eta=0.3, max_depth=3, subsample=1.0), d,
+                                     num_boost_round=20, xgb_model=m.copy()).predict(self.dc)
+                           for m, p in self.models])
+        else:
+            sc = self.base_scores
+        return (sc - sc.mean(1, keepdims=True)) / (sc.std(1, keepdims=True) + 1e-9)
+
+    def _rgpe(self, z):
+        """RGPE expected improvement (standardised own units) over all candidates."""
+        np = self.np
+        own = np.array(self.own_y)
+        rows = np.array(self.own_idx)
+        y = self._std(own)
+        G = self.Gc[rows]
+        gp = self._fit_gp(G, y)
+        K = gp.kernel_(G)
+        Ki = np.linalg.inv(K + 1e-10 * np.eye(len(y)))
+        mloo, vloo = y - (Ki @ y) / np.diag(Ki), 1.0 / np.diag(Ki)
+        mt, st = gp.predict(self.Gc, return_std=True)
+        BM = np.vstack([self.BM, z.mean(0)])
+        BS = np.vstack([self.BS, np.maximum(z.std(0), 0.05)])
+        B, n, S = len(BM), len(y), 256
+        iu = np.triu_indices(n, 1)
+        dy = np.sign(y[:, None] - y[None, :])[iu]
+
+        def loss(f):
+            return (np.sign(f[..., :, None] - f[..., None, :])[(Ellipsis,) + iu] != dy).sum(-1)
+        fb = BM[:, rows][:, None, :] + BS[:, rows][:, None, :] * self.rng.standard_normal((B, S, n))
+        ft = mloo + np.sqrt(np.maximum(vloo, 1e-12)) * self.rng.standard_normal((S, n))
+        L = np.vstack([loss(fb), loss(ft)[None]]) + self.rng.random((B + 1, S)) * 0.1
+        w = np.bincount(L.argmin(0), minlength=B + 1) / S
+        w[:-1][np.median(L[:-1], axis=1) > np.percentile(L[-1], 95)] = 0.0
+        w = w / w.sum() if w.sum() > 0 else np.r_[np.zeros(B), 1.0]
+        self.last_weights = dict(target=float(w[-1]), ranker=float(w[-2]))
+        mu = w[:-1] @ BM + w[-1] * mt
+        sd = np.sqrt((w[:-1] ** 2) @ (BS ** 2) + (w[-1] * st) ** 2)
+        return self._ei(mu, sd, y.max())
+
+    def ask(self):
+        point, row = self.ask_many(1)[0]
+        self.asked = row
+        return point
+
+    def ask_many(self, n):
+        np = self.np
+        idx = np.flatnonzero(~self.cand.canon.isin(self.seen).values)
+        if len(idx) == 0:
+            self.last_max_ei = 0.0
+            return []
+        z = self._rank_z()
+        if self.rgpe and len(self.own_y) >= max(2, self.switch):
+            acq = self._rgpe(z)
+        else:
+            acq = z.mean(0) + z.std(0)
+        acq = acq + self.rng.random(len(acq)) * 1e-9
+        # Convergence signal in log speedup units from the kernel's own observations.
+        if len(self.own_y) >= self.min_obs:
+            gp = self._fit_gp(self.Gc[np.array(self.own_idx)], np.array(self.own_y))
+            mu, sd = gp.predict(self.Gc[idx], return_std=True)
+            self.last_max_ei = float(self._ei(mu, sd, max(self.own_y)).max())
+        else:
+            self.last_max_ei = float('inf')
+        out = []
+        for j in idx[np.argsort(-acq[idx])[:n]]:
+            r = self.cand.iloc[j]
+            out.append((config_to_point(dict(MaxThreads=r.MaxThreads, MinTeams=r.MinTeams,
+                                             NumThreads=r.NumThreads, NumTeams=r.NumTeams),
+                                        self.trip), (j, r)))
+        return out
+
+    def tell_trial(self, trial, values):
+        j, r = trial
+        self.seen.add(r.canon)
+        v = values[self.objective]
+        if v > math.log(0.02):
+            self.own_idx.append(int(j))
+            self.own_X.append(self.Xc[j])
+            self.own_y.append(v)
+
+    def tell(self, point, values):
+        self.tell_trial(self.asked, values)
+
+
 def prior_coords(u):
     """Map fractional points to the space the prior is defined in (log teams)."""
     import numpy as np
@@ -633,6 +806,11 @@ def make_searcher(algorithm, bounds, seed, n_init, objectives, featurize=None,
                                      options['table'], options['trip_count'],
                                      initial_points=options.get('initial_points'),
                                      prior_points=options.get('prior_points'))
+    if algorithm in ('rank-transfer', 'rank-rgpe'):
+        return RankTransferSearcher(bounds, seed, objectives, options['pool'],
+                                    options['target_kid'], options['klass'],
+                                    options['table'], options['trip_count'],
+                                    rgpe=algorithm == 'rank-rgpe')
     if algorithm == 'bo':
         return BOSearcher(bounds, seed, n_init, objectives)
     if algorithm in ('tpe', 'random', 'motpe'):

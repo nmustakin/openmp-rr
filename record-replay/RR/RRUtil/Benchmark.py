@@ -584,6 +584,14 @@ class Kernel:
                          configs of other same-class kernels
           transfer-model cost model trained on other kernels plus this one,
                          ranking a deduplicated candidate set
+          rank-batch     pairwise-ranking cost model across kernels (XGBoost),
+                         batch screening, convergence stop from a GP on own
+                         screens (options['ei_stop'])
+          rank-rgpe-batch  rank-batch for the first 5 screens, then a
+                         ranking-weighted GP ensemble (RGPE)
+        Batch strategies also accept options['patience'] (batches without a
+        relative gain above options['patience_tol'], default 0.002, before
+        stopping).
         """
         from RRUtil.Search import (make_searcher, objective_values, build_compile_table,
                                    compile_features, classify_bottleneck, build_portfolio,
@@ -610,7 +618,7 @@ class Kernel:
 
         klass = None
         if algorithm in ('adaptive', 'tpe-portfolio', 'trees-prior', 'transfer-model',
-                         'combined', 'combined-batch'):
+                         'combined', 'combined-batch', 'rank-batch', 'rank-rgpe-batch'):
             # Classify from the median of several baseline metric samples; a
             # single profiled launch can be power-throttled.
             samples = db.Data[self.getDefaultKey()].get('metrics_samples', [base_metrics])
@@ -675,6 +683,13 @@ class Kernel:
                      teams_frac=r.teams_frac), self.getTripCount()) for r in top.itertuples()]
             print(f'Combined: class {klass}, {len(options["initial_points"])} portfolio points, '
                   f'{len(options["prior_points"])} prior points', flush=True)
+        elif algorithm in ('rank-batch', 'rank-rgpe-batch'):
+            # Pairwise-ranking cost model across kernels (optionally followed by
+            # a ranking-weighted GP ensemble), batch screening, and a convergence
+            # stop from a GP on the kernel's own screens.
+            strategy = 'rank-rgpe' if algorithm == 'rank-rgpe-batch' else 'rank-transfer'
+            fidelity = 'batch'
+            options.setdefault('promote', 2)
         elif algorithm == 'trees-prior':
             others = pool[(pool.kid != options['target_kid']) & (pool.klass == klass)]
             if others.empty:
@@ -714,7 +729,7 @@ class Kernel:
                 key = self.getConfigKey({**config, 'DeviceID': device})
                 f, invalid = compile_features(config, table, trip_count)
                 return f, invalid, key
-        if strategy == 'transfer-model':
+        if strategy in ('transfer-model', 'rank-transfer', 'rank-rgpe'):
             options.update(pool=pool, klass=klass, table=table, trip_count=self.getTripCount())
         searcher = make_searcher(strategy, pBounds, seed, initSamples, objectives,
                                  featurize, target, options)
@@ -746,6 +761,11 @@ class Kernel:
             q = options.get('batch_size', 16)
             unit = options.get('batch_unit_cost', 0.6)    # nominal s per batch screen
             ei_stop = options.get('ei_stop')
+            # Patience stop: `patience` consecutive batches that do not raise the
+            # best screen by more than `patience_tol` (relative).
+            patience = options.get('patience')
+            patience_tol = options.get('patience_tol', 0.002)
+            batch_best = []
             stop_reason = 'budget'
             while budget_left(unit * q):
                 groups = {}
@@ -796,6 +816,12 @@ class Kernel:
                 if (ei_stop and max_ei is not None and max_ei < ei_stop
                         and not getattr(searcher, 'initial', None)):
                     stop_reason = 'converged'
+                    break
+                batch_best.append(max([t['speedup'] for t in trace] or [0]))
+                if (patience and len(batch_best) > patience
+                        and batch_best[-1] <= batch_best[-1 - patience] * (1 + patience_tol)
+                        and not getattr(searcher, 'initial', None)):
+                    stop_reason = 'patience'
                     break
             db.MetaData['stop_reason'] = stop_reason
             db.MetaData['search_wall_s'] = time.perf_counter() - t_start
