@@ -1917,9 +1917,18 @@ configurations than \code{tpe-batch} by more than 0.5\% on four kernels, most on
 S3D l226 (1.02\x{} against 1.06\x{}) and miniWeather l760 (1.41\x{} against
 1.44\x{}), and faster ones on two. The patience stop fired in all 42 runs. The
 time before the search was about 140~s per run, twice that on LULESH and
-miniFE, mostly for training the bagged rankers on about 60{,}000
-configurations of the other applications, which could be cached between
-kernels.
+miniFE. A timestamped run of S3D l171 on an otherwise idle machine took 111~s
+end to end: about 58~s for the three profiled measurements of the baseline
+(about 14~s of each is the metrics replay), about 20~s for training the bagged
+rankers on about 45{,}000 configurations of the other applications, 28~s of
+search, and 6~s of confirmation; during the online study, seven runs shared
+the CPU, which slowed the training. Because the rankers do not depend on the
+target kernel, the tuner now trains them in a background thread while the
+baseline is measured, and caches the trained models on disk under a key of the
+training data, the parameters, and the seed, so that the other kernels of the
+same application load them in 0.3~s. The same run then took 92~s to 93~s
+with an empty or a filled cache and shipped the same configuration. The
+remaining time before the search is the profiled baseline measurements.
 
 The online speedups of AMGmk (1.67\x{}) and SU3 (1.65\x{}) exceed the optima of
 their landscapes (1.43\x{} and 1.29\x{}). The online candidate set uses 28 teams
@@ -2054,7 +2063,7 @@ and \code{devices} of \code{Kernel.Search}), with the runs in
 \code{analyze\_mgpu.py}, \code{analysis.log}). The HeCBench study of
 Section~\ref{sec:hecbench} is in \code{hecbench-2026-10-13} (recording probes,
 \code{landscape\_hec.py}, \code{hec\_offline.py}, \code{hec\_search\_run.py},
-\code{online/}, \code{RESULTS.md}); the HeCBench build, its makefiles, the MPI
+\code{online/}, \code{online/timing/}, \code{RESULTS.md}); the HeCBench build, its makefiles, the MPI
 stub, and the recordings are in \code{/data2/nmn/rr-metrics/hecbench}, and the
 application wrappers are commit \code{126201dce}
 (\code{record-replay/RR/benchmarks/hecbench}).
