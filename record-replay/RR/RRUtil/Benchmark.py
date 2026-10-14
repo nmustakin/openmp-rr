@@ -611,6 +611,23 @@ class Kernel:
         def measure(config, screen=False):
             return self.sample(Tries=self.TimingTries, Screen=screen, **config)
 
+        # The ranking models do not depend on the target kernel, so train them in a
+        # background thread while the baseline is measured (XGBoost releases the GIL).
+        rank_job = None
+        if algorithm in ('rank-batch', 'rank-rgpe-batch') and options.get('pool') is not None:
+            import threading
+            from RRUtil.Search import train_rank_models
+            rank_job = {'t0': time.perf_counter()}
+            rank_pool, rank_target = options['pool'], options.get('target_kid')
+
+            def _train():
+                try:
+                    rank_job['models'] = train_rank_models(rank_pool, rank_target, seed)
+                except Exception as e:      # re-raised when the models are needed
+                    rank_job['error'] = e
+                rank_job['seconds'] = time.perf_counter() - rank_job['t0']
+            rank_job['thread'] = threading.Thread(target=_train, daemon=True)
+            rank_job['thread'].start()
         devices = list(options.get('devices') or [0])
         classifying = algorithm in ('adaptive', 'tpe-portfolio', 'trees-prior', 'transfer-model',
                                     'combined', 'combined-batch', 'rank-batch', 'rank-rgpe-batch')
@@ -753,6 +770,17 @@ class Kernel:
                 return f, invalid, key
         if strategy in ('transfer-model', 'rank-transfer', 'rank-rgpe'):
             options.update(pool=pool, klass=klass, table=table, trip_count=self.getTripCount())
+        if rank_job is not None:
+            t_wait = time.perf_counter()
+            rank_job['thread'].join()
+            if 'error' in rank_job:
+                raise rank_job['error']
+            options['rank_models'] = rank_job['models']
+            waited = time.perf_counter() - t_wait
+            db.MetaData['rank_training_s'] = rank_job['seconds']
+            db.MetaData['rank_training_wait_s'] = waited
+            print(f'Ranking models ready: {rank_job["seconds"]:.1f}s to train or load, '
+                  f'{waited:.1f}s waited', flush=True)
         searcher = make_searcher(strategy, pBounds, seed, initSamples, objectives,
                                  featurize, target, options)
         # The register-mix target needs metrics for every observed config, so

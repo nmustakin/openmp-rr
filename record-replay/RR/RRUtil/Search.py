@@ -547,6 +547,67 @@ def rank_grades(y, levels=32):
 GP_SCALE = [10.0, 8.0, 255.0, 10.0, 1.0, 10.0, 1.0]
 
 
+def train_rank_models(pool, target_kid, seed, bags=8, rounds=150, cache_dir=None):
+    """Bagged XGBoost pairwise rankers for RankTransferSearcher.
+
+    One query group per kernel of `pool` other than `target_kid`, with percentile
+    grades of the log speedup as relevance; each bag is a bootstrap sample of the
+    kernels. The models do not depend on the target kernel's features, so they can
+    be trained before (or while) the target is measured. With `cache_dir` (default:
+    $RR_RANK_CACHE), models are stored under a key of the training data, the
+    parameters, the seed, and the XGBoost version, and reused by later searches with
+    the same training set (e.g. all kernels of an application tuned with the
+    application left out). Returns a list of (booster, params).
+    """
+    import hashlib
+    import json
+    import os
+    import numpy as np
+    import pandas as pd
+    import xgboost as xgb
+    cache_dir = cache_dir or os.environ.get('RR_RANK_CACHE')
+    other = pool[(pool.kid != target_kid) & (pool.speedup > 0)]
+    params = [dict(objective='rank:pairwise', eta=0.1, max_depth=6, subsample=0.8,
+                   lambdarank_pair_method='mean', lambdarank_num_pair_per_sample=8,
+                   nthread=int(os.environ.get('RR_RANK_THREADS', 2)), seed=int(seed * 100 + b),
+                   verbosity=0) for b in range(bags)]
+    key = None
+    if cache_dir:
+        cols = ['kid', 'NumThreads', 'teams_frac', 'regs', 'spill', 'occ', 'waves', 'tail',
+                'klass', 'speedup']
+        h = hashlib.sha1()
+        h.update(pd.util.hash_pandas_object(other[cols].sort_values(cols[:3]),
+                                            index=False).values.tobytes())
+        h.update(json.dumps([{k: v for k, v in p.items() if k != 'nthread'} for p in params],
+                            sort_keys=True).encode())
+        h.update(f'{rounds}-{xgb.__version__}'.encode())
+        key = os.path.join(cache_dir, h.hexdigest()[:20])
+        files = [os.path.join(key, f'bag{b}.json') for b in range(bags)]
+        if all(os.path.exists(f) for f in files):
+            out = []
+            for f, p in zip(files, params):
+                m = xgb.Booster()
+                m.load_model(f)
+                out.append((m, p))
+            return out
+    rng = np.random.default_rng(seed)
+    groups = [(transfer_frame(g), np.log(g.speedup.values)) for _, g in other.groupby('kid')]
+    out = []
+    for b, p in enumerate(params):
+        pick = rng.choice(len(groups), len(groups), replace=True)
+        X = np.vstack([groups[i][0] for i in pick])
+        y = np.concatenate([rank_grades(groups[i][1]) for i in pick])
+        q = np.concatenate([np.full(len(groups[i][1]), j) for j, i in enumerate(pick)])
+        out.append((xgb.train(p, xgb.DMatrix(X, label=y, qid=q), num_boost_round=rounds), p))
+    if key:
+        os.makedirs(key, exist_ok=True)
+        for b, (m, _) in enumerate(out):
+            tmp = os.path.join(key, f'bag{b}.tmp{os.getpid()}.json')   # extension selects JSON
+            m.save_model(tmp)
+            os.replace(tmp, os.path.join(key, f'bag{b}.json'))
+    return out
+
+
 class RankTransferSearcher(TransferModelSearcher):
     """Pairwise-ranking cost model across kernels, optionally followed by RGPE.
 
@@ -567,29 +628,24 @@ class RankTransferSearcher(TransferModelSearcher):
     """
 
     def __init__(self, bounds, seed, objectives, pool, target_kid, klass, table, trip_count,
-                 rgpe=False, switch=5, bags=8, min_obs=32, rounds=150):
+                 rgpe=False, switch=5, bags=8, min_obs=32, rounds=150, models=None,
+                 cache_dir=None):
         import numpy as np
         import xgboost as xgb
         super().__init__(bounds, seed, objectives, pool, target_kid, klass, table, trip_count)
         self.xgb, self.rgpe, self.switch, self.min_obs = xgb, rgpe, switch, min_obs
         self.rng = np.random.default_rng(seed)
-        other = pool[(pool.kid != target_kid) & (pool.speedup > 0)]
-        groups = [(transfer_frame(g), np.log(g.speedup.values)) for _, g in other.groupby('kid')]
-        self.models = []
-        for b in range(bags):
-            pick = self.rng.choice(len(groups), len(groups), replace=True)
-            X = np.vstack([groups[i][0] for i in pick])
-            y = np.concatenate([rank_grades(groups[i][1]) for i in pick])
-            q = np.concatenate([np.full(len(groups[i][1]), j) for j, i in enumerate(pick)])
-            p = dict(objective='rank:pairwise', eta=0.1, max_depth=6, subsample=0.8,
-                     lambdarank_pair_method='mean', lambdarank_num_pair_per_sample=8,
-                     nthread=2, seed=int(seed * 100 + b), verbosity=0)
-            self.models.append((xgb.train(p, xgb.DMatrix(X, label=y, qid=q),
-                                          num_boost_round=rounds), p))
+        # Models trained ahead (Kernel.Search starts the training in a background
+        # thread while the baseline is measured) or trained here, using the cache.
+        self.models = models if models is not None else train_rank_models(
+            pool, target_kid, seed, bags=bags, rounds=rounds, cache_dir=cache_dir)
         self.dc = xgb.DMatrix(self.Xc)
         self.base_scores = np.array([m.predict(self.dc) for m, _ in self.models])
         self.Gc = self.Xc[:, :7] / np.array(GP_SCALE)
         if rgpe:
+            other = pool[(pool.kid != target_kid) & (pool.speedup > 0)]
+            groups = [(transfer_frame(g), np.log(g.speedup.values))
+                      for _, g in other.groupby('kid')]
             mus, sds = [], []
             for X, y in groups:
                 idx = self.rng.choice(len(y), min(300, len(y)), replace=False)
@@ -810,7 +866,8 @@ def make_searcher(algorithm, bounds, seed, n_init, objectives, featurize=None,
         return RankTransferSearcher(bounds, seed, objectives, options['pool'],
                                     options['target_kid'], options['klass'],
                                     options['table'], options['trip_count'],
-                                    rgpe=algorithm == 'rank-rgpe')
+                                    rgpe=algorithm == 'rank-rgpe',
+                                    models=options.get('rank_models'))
     if algorithm == 'bo':
         return BOSearcher(bounds, seed, n_init, objectives)
     if algorithm in ('tpe', 'random', 'motpe'):
