@@ -76,7 +76,8 @@ batch replay and four GPUs, a kernel is tuned in about 105~s end to end,
 about 38\x{} faster than the original workflow. On 31 kernels of ten further
 proxy applications from HeCBench, tuned as new applications with models
 trained on the other applications, this tuner ships the same speedups as
-batch TPE (1.56\x{} on the 14 kernels with headroom) in 31\% less time.
+batch TPE (1.56\x{} on the 14 kernels with headroom) in a third of the time
+(113~s against 332~s per kernel).
 \end{abstract}
 
 \tableofcontents
@@ -142,7 +143,7 @@ In this work, we make the following contributions:
   (Section~\ref{sec:learnedtransfer}).
 \item We add 31 kernels of ten HeCBench proxy applications, measure their
   complete configuration spaces, and show that the ranking model transfers to
-  applications it was not trained on, matching batch TPE online in 31\% less
+  applications it was not trained on, matching batch TPE online in a third of the
   time (Section~\ref{sec:hecbench}).
 \end{itemize}
 
@@ -1955,6 +1956,53 @@ optimum in Sections~\ref{sec:rl}, \ref{sec:learnedtransfer},
 and~\ref{sec:hecbench} are relative to the best configuration of the
 landscape, not of the full space.
 
+\subsection{Validation of the faster tuner}
+\label{sec:hecval2}
+We reran the online experiment of this section with the tuner that trains the
+rankers in the background and classifies the baseline from one profile
+(\code{rank-confirm-fast}), on the same 14 kernels with three seeds and the
+same seven concurrent jobs, and re-measured the shipped configurations of
+\code{rank-confirm-fast}, \code{rank-confirm}, and \code{tpe-batch} with the
+baseline in five new randomized rounds. Table~\ref{tab:hecval2} shows the
+result. The faster tuner shipped configurations as fast as the earlier one
+(ratio 1.001 [1.000, 1.003], better on two kernels and worse on none) and as
+fast as \code{tpe-batch} within the noise (0.996 [0.991, 1.001]), in half the
+end-to-end time of the earlier tuner (113~s against 229~s per run) and a third
+of the time of \code{tpe-batch} (332~s). The time fell most on short kernels,
+for example from 162~s to 51~s on minisweep l315 and from 245~s to 83~s on S3D
+l183. In 32 of the 42 runs, one profile classified the kernel; in the other
+ten, a metric was within 5 points of a threshold and two more profiles were
+taken.
+
+\begin{table}[t]
+\centering
+\caption{The faster tuner on the 14 HeCBench kernels (three seeds each, no cache, seven
+concurrent jobs). All shipped configurations re-measured with the baseline in the same
+five randomized rounds.}
+\label{tab:hecval2}
+\small
+\begin{tabular}{lrrr}
+\toprule
+& \code{rank-confirm-fast} & \code{rank-confirm} & \code{tpe-batch} \\
+\midrule
+Shipped speedup (geometric mean) & 1.562 & 1.560 & 1.568 \\
+End-to-end time per run & 113~s & 229~s & 332~s \\
+Search time per run & 59~s & 75~s & 182~s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This experiment exposed a failure that predates these changes. In 2 of the 42
+runs, a timing replay of the first baseline measurement failed, the baseline
+entry stayed invalid for the whole run, and the search compared candidates
+against no baseline (the confirmation, which times its own baseline, was not
+affected). The same happened in 7 of 704 runs of the earlier studies, including
+two of the \code{tpe-batch} runs of this comparison. The tuner now retries the
+baseline measurement up to three times and stops with an error if it never
+succeeds; injecting failures confirmed that a single failure is retried and
+the run completes, and that three failures stop the run. The two affected runs
+were repeated with the fix, and their kernels were validated again.
+
 %=============================================================================
 \section{Discussion and recommendations}
 \label{sec:discussion}
@@ -1975,7 +2023,7 @@ on one) and improved the true speedup of the shipped configurations from
 1.39\x{} to 1.53\x{} on the five kernels that we compared end to end
 (Sections~\ref{sec:endtoend} and~\ref{sec:confirm}). On ten further
 applications from HeCBench, tuned as new applications, the same tuner matched
-batch TPE in 31\% less time (Section~\ref{sec:hecbench}).
+batch TPE in a third of the time (Sections~\ref{sec:hecbench} and~\ref{sec:hecval2}).
 
 We recommend the following changes to the tuner, in order of expected
 benefit per unit of effort.
@@ -2079,7 +2127,8 @@ and \code{devices} of \code{Kernel.Search}), with the runs in
 \code{analyze\_mgpu.py}, \code{analysis.log}). The HeCBench study of
 Section~\ref{sec:hecbench} is in \code{hecbench-2026-10-13} (recording probes,
 \code{landscape\_hec.py}, \code{hec\_offline.py}, \code{hec\_search\_run.py},
-\code{online/}, \code{online/timing/}, \code{RESULTS.md}); the HeCBench build, its makefiles, the MPI
+\code{online/}, \code{online/timing/}, \code{online2/}, \code{retry-test/},
+\code{RESULTS.md}; the baseline retry is commit \code{33b68afa7}); the HeCBench build, its makefiles, the MPI
 stub, and the recordings are in \code{/data2/nmn/rr-metrics/hecbench}, and the
 application wrappers are commit \code{126201dce}
 (\code{record-replay/RR/benchmarks/hecbench}).
