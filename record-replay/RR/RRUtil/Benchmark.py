@@ -654,11 +654,19 @@ class Kernel:
                     [M0] + [r[7] for r in res[1:] if r[0]])
                 db.Update()
         if self.getDefaultKey() not in db:
-            Valid, SStats, DStats, Duration, Energy, GLoads, GStores = measure({})
+            # Every speedup is relative to this measurement, so retry a failed replay
+            # (a transient failure left an invalid baseline that later samples cannot
+            # repair) and stop rather than search against no baseline.
+            for attempt in range(3):
+                Valid, SStats, DStats, Duration, Energy, GLoads, GStores = measure({})
+                if Valid:
+                    break
+                print(f'Baseline measurement failed (attempt {attempt + 1} of 3)', flush=True)
+            if not Valid:
+                raise RuntimeError('baseline measurement failed three times')
             db.Add(self.getDefaultKey(), [SStats], DStats, [Duration], [Energy],
                    [GLoads], [GStores], Valid)
-            if Valid:
-                db.SetMetrics(self.getDefaultKey(), getattr(self, 'LastMetrics', {}))
+            db.SetMetrics(self.getDefaultKey(), getattr(self, 'LastMetrics', {}))
         base_metrics = db.Data.get(self.getDefaultKey(), {}).get('metrics', {})
 
         klass = None
