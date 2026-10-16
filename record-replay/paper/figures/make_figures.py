@@ -463,14 +463,16 @@ def fig_learned():
 # ---------------------------------------------------------------- 14. HeCBench online
 def fig_hec():
     H = f'{X}/hecbench-2026-10-13'
-    r = pd.read_csv(f'{H}/online/shipped.csv')
+    r = pd.read_csv(f'{H}/online3/shipped3.csv')
     t = r.groupby(['kernel', 'method']).speedup.apply(gmean).unstack('method')
     t['opt'] = r.groupby('kernel').landscape_opt.first()
     t = t.sort_values('tpe-batch', ascending=False)
     fig, ax = plt.subplots(figsize=(TWO, 2.2))
-    x = np.arange(len(t)); w = 0.38
-    ax.bar(x - w / 2, t['rank-confirm'], w, color=SLOT[0], label='Ranking model, patience stop')
-    ax.bar(x + w / 2, t['tpe-batch'], w, color=SLOT[1], label='Batch TPE (300 s)')
+    x = np.arange(len(t)); w = 0.27
+    for i, (m, label) in enumerate([('rank-confirm-refine', 'Final tuner (with refinement)'),
+                                    ('rank-confirm-fast', 'Without refinement'),
+                                    ('tpe-batch', 'Batch TPE (300 s)')]):
+        ax.bar(x + (i - 1) * w, t[m], w, color=SLOT[i], label=label)
     ax.scatter(x, t['opt'], marker='_', s=120, color=INK, zorder=3, label='Landscape optimum')
     ax.axhline(1.0, color=INK2, linewidth=0.8)
     ax.set_xticks(x)
