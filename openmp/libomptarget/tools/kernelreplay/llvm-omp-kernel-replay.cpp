@@ -231,9 +231,12 @@ int main(int argc, char **argv) {
       SmallVector<StringRef> Fields;
       Line.trim().split(Fields, ' ', -1, false);
       int32_t Teams = 0, Threads = 0;
+      // As for the command line, 0 means the recorded num_teams / thread_limit
+      // clause, so a "0 0" line replays the application's own launch.
       if (Fields.size() == 2 && !Fields[0].getAsInteger(10, Teams) &&
           !Fields[1].getAsInteger(10, Threads))
-        Configs.push_back({Teams, Threads});
+        Configs.push_back({Teams > 0 ? Teams : (int32_t)NumTeamsJson.value(),
+                           Threads > 0 ? Threads : (int32_t)NumThreadsJson.value()});
     }
   } else {
     Configs.push_back({NumTeams, NumThreads});
