@@ -593,7 +593,9 @@ class Kernel:
                          screens (options['ei_stop'])
           rank-rgpe-batch  rank-batch for the first 5 screens, then a
                          ranking-weighted GP ensemble (RGPE)
-        Batch strategies also accept options['devices'] (CUDA ordinals to
+        Batch strategies also accept options['refine'] (rank strategies: after
+        the patience stop, screen the untried neighbours of the 3 best screens while
+        that gains), options['devices'] (CUDA ordinals to
         split each batch across), options['confirm'] = 'batch' (re-time the
         `promote` best screens in batch replay next to the default instead of
         full measurements), and options['patience'] (batches without a
@@ -938,7 +940,15 @@ class Kernel:
                 if (patience and len(batch_best) > patience
                         and batch_best[-1] <= batch_best[-1 - patience] * (1 + patience_tol)
                         and not getattr(searcher, 'initial', None)):
-                    stop_reason = 'patience'
+                    # Optional local refinement around the best screens before stopping:
+                    # continue while a refinement batch gains more than patience_tol.
+                    if (options.get('refine') and hasattr(searcher, 'start_refine')
+                            and not getattr(searcher, 'refining', False)):
+                        searcher.start_refine()
+                        patience = 1
+                        print('Patience reached; refining around the best screens', flush=True)
+                        continue
+                    stop_reason = 'patience' + ('+refine' if getattr(searcher, 'refining', False) else '')
                     break
             db.MetaData['stop_reason'] = stop_reason
             db.MetaData['search_wall_s'] = time.perf_counter() - t_start
@@ -1545,9 +1555,14 @@ class BaseBenchmark(ABC):
         def command(self):
             return self.cmd
 
-        def env(self, profile_metrics=True, profile_activities=True,
+        def env(self, profile_metrics=None, profile_activities=True,
                 profile_timing=False):
             env_vars = dict(self.envVars)
+            # Profiling metrics on every launch makes recording long applications
+            # very slow (each kernel is recorded at its first launch anyway);
+            # RR_RECORD_METRICS=0 records with activities only.
+            if profile_metrics is None:
+                profile_metrics = os.environ.get('RR_RECORD_METRICS', '1') != '0'
             env_vars['LIBOMPTARGET_RR_PROFILE_METRICS'] = int(profile_metrics)
             env_vars['LIBOMPTARGET_RR_PROFILE_ACTIVITIES'] = int(profile_activities)
             env_vars['LIBOMPTARGET_RR_PROFILE_TIMING'] = int(profile_timing)

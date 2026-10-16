@@ -735,8 +735,43 @@ class RankTransferSearcher(TransferModelSearcher):
         self.asked = row
         return point
 
+    refining = False
+
+    def start_refine(self):
+        """Switch to local refinement (Kernel.Search, options['refine']): later batches
+        are the untried candidates nearest to the 3 best observations."""
+        self.refining = True
+
+    def _refine_batch(self, n):
+        """Untried candidates within one binary rank, 2 warps of threads, and 2 teams-
+        fraction grid steps of the 3 best observations, nearest first."""
+        np = self.np
+        if not self.own_idx:
+            return []
+        bins = sorted(set(zip(self.cand.regs, self.cand.spill)))
+        b = np.array([bins.index(x) for x in zip(self.cand.regs, self.cand.spill)], float)
+        pts = np.c_[b, self.cand.NumThreads.values / 32.0,
+                    np.log2(self.cand.teams_frac.values) / (8.0 / 27)]
+        top = [self.own_idx[i] for i in np.argsort(-np.array(self.own_y))[:3]]
+        d = np.full(len(pts), np.inf)
+        for t in top:
+            dd = np.abs(pts - pts[t])
+            ok = (dd[:, 0] <= 1) & (dd[:, 1] <= 2) & (dd[:, 2] <= 2.5)
+            d = np.minimum(d, np.where(ok, dd.sum(1), np.inf))
+        d[self.cand.canon.isin(self.seen).values] = np.inf
+        cand = np.flatnonzero(np.isfinite(d))
+        out = []
+        for j in cand[np.argsort(d[cand])][:n]:
+            r = self.cand.iloc[j]
+            out.append((config_to_point(dict(MaxThreads=r.MaxThreads, MinTeams=r.MinTeams,
+                                             NumThreads=r.NumThreads, NumTeams=r.NumTeams),
+                                        self.trip), (j, r)))
+        return out
+
     def ask_many(self, n):
         np = self.np
+        if self.refining:
+            return self._refine_batch(n)
         idx = np.flatnonzero(~self.cand.canon.isin(self.seen).values)
         if len(idx) == 0:
             self.last_max_ei = 0.0
