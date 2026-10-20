@@ -84,6 +84,12 @@ on 162 kernels of 62 applications, a ranking model trained on about 150
 kernels of other applications reaches 0.63 of the optimum after five
 evaluations on a new application, against 0.27 when trained on 48 kernels and
 0.40 for TPE, so learned transfer pays off once enough kernels are available.
+A replication of these later experiments on a Quadro RTX 6000 reproduces the
+online results within their confidence intervals (for example, the final tuner
+with refinement ties batch TPE at 0.9993 of its shipped speedup in a third of
+its time) and the input and training-set results, while the regression transfer
+model is stronger on that GPU and removes the ranking model's lead at 48
+training kernels.
 \end{abstract}
 
 \tableofcontents
@@ -2197,6 +2203,331 @@ amount of training data: with 17 kernels it was not worth its cost
 about 150 it is the best method for a new application.
 
 %=============================================================================
+\section{Replication on a second GPU}
+\label{sec:replication}
+
+All results so far come from T4 GPUs. To test whether the conclusions of
+Sections~\ref{sec:rl} to~\ref{sec:more} depend on the GPU, we repeated those
+experiments on one NVIDIA Quadro RTX 6000. The RTX 6000 has the same
+architecture as the T4 (Turing, compute capability 7.5) but 72 instead of 40
+SMs, 24~GB of memory, and a 260~W instead of a 70~W power limit, so the
+replication changes the GPU while keeping the code generation the same. Most
+conclusions hold, often within the confidence intervals of the T4 results. The
+differences concern the absolute online times, the strength of the regression
+transfer model, and offline results that rest on few kernels. We did not
+repeat the four-GPU experiment of Section~\ref{sec:confirm}.
+
+\subsection{Setup}
+\label{sec:repl-setup}
+The replication used commit \code{454c76f00} with NVIDIA driver 560.35.05 and
+CUDA~12.6, built natively with GCC~12 instead of in the container. We changed
+the tuner in three ways that do not change its measurement or search
+algorithms. First, the device limits that the compile-time features use (the
+number of SMs and the threads and blocks per SM) are read from environment
+variables, because the code fixes the 40 SMs of the T4. Second, the driver of
+this machine restricts the performance counters to the administrator, so the
+profiled metrics replays ran as root through a command prefix
+(\code{RR\_METRICS\_PREFIX}), while the timing replays, the batch replays, and
+the tuner ran as an ordinary user. Third, recordings and landscapes used
+timing replays only, and recordings were limited to the kernels needed when
+disk space was short. We built miniWeather against OpenMPI with one rank
+instead of the MPI stub and used HeCBench commit \code{f0c817aa3}.
+
+The experiment scripts of the earlier sections are not part of the
+repository, so we wrote new drivers from the descriptions in this report.
+They call the tuner's own code (\code{Kernel.Search},
+\code{Kernel.sample\_batch}, \code{RankTransferSearcher}, and
+\code{classify\_bottleneck}), and the offline methods follow
+Sections~\ref{sec:rl} and~\ref{sec:learnedtransfer}. Where the report leaves a
+choice open, we made the following choices. The online strategies were
+trained on the exhaustive landscapes of the other kernels (leaving the kernel
+out for Section~\ref{sec:learnedtransfer} and the application out for
+Sections~\ref{sec:hecbench} and~\ref{sec:inputs}), with each kernel's class
+from three warmed baseline profiles. For the cross-application folds of
+Section~\ref{sec:rl}, we trained one policy per fold instead of one per test
+kernel. Several kernels can share a source line, for example template
+instantiations, and we counted each of them as a separate kernel, which gives
+more bulk kernels than Section~\ref{sec:more}. Finally, we capped the
+landscape of a bulk kernel at 45 minutes, because a kernel whose candidate
+launches often crash the replay restarts a replay process for every failure,
+and three kernels exceeded the cap. All shipped configurations were validated
+as before, in five randomized rounds that re-measure the configurations of
+all compared strategies together with the baseline.
+
+\subsection{Landscapes and classes}
+The landscapes of the 17 LULESH and miniFE kernels contain 22{,}480
+configurations, of which nine kernels have an optimum above 1.05\x{} (eleven on
+the T4). The large gains are larger than on the T4. LULESH l649 reaches
+3.06\x{} (best known on the T4 2.56\x{}), l1029 2.91\x{} (2.45\x{}), and l1080
+3.01\x{} (1.55\x{}), while l1201 (1.55\x{}), l844 (1.19\x{}), and l333
+(1.07\x{}) are close to the T4. The four compute-saturated kernels gain at most
+1.03\x{}, as on the T4. On miniFE, l521 reaches 1.80\x{} and the reductions l290
+and l254 1.19\x{} and 1.18\x{}, while the vector kernels l157, l169, l205, and
+l210 stay at 1.02\x{} to 1.05\x{}, so l254 has headroom on the RTX 6000 and l169,
+l205, and l210 do not. The classes that the rules of
+Section~\ref{sec:adaptive} assign from three warmed profiles are the same as
+on the T4 for all 17 kernels.
+
+Of the HeCBench set of Section~\ref{sec:hecbench}, 27 kernels from nine
+applications fall into the timing range, because the AMGmk kernel takes only
+59~$\mu$s on the RTX 6000, and 14 of them have headroom (15 on the T4). Their
+optima resemble the corrected T4 landscapes: 3.41\x{} to 3.44\x{} for the three
+short-loop kernels of minisweep (3.4\x{} on the T4), 1.60\x{} for its fourth
+kernel (1.62\x{}), 1.69\x{} for miniWeather l760 (1.53\x{}), and 1.42\x{} for S3D l171
+(1.56\x{}), but 2.75\x{} for SU3 (1.74\x{}) and 1.46\x{} for XSBench (1.06\x{}). Of
+the 140 bulk applications, 18 failed to build or to run their test input, and
+the other 122 gave 147 kernels from 76 applications in the selection range.
+Three of them have a default launch outside the candidate space, as in
+Section~\ref{sec:more}, which leaves 188 kernels of 84 applications with
+210{,}866 configurations, of which 106 have headroom (101 on the T4).
+
+\subsection{Learned policies and learned transfer}
+Table~\ref{tab:repl-rl} repeats the offline comparison of
+Sections~\ref{sec:rl} and~\ref{sec:learnedtransfer} on the RTX 6000
+landscapes. The ranking model remains the most consistent method within the
+same applications (0.73, 0.88, and 0.98 of the optimum after 5, 10, and 30
+evaluations, against 0.76, 0.91, and 0.98 on the T4). The learned policy beats
+TPE after ten evaluations (+0.122, CI [+0.012, +0.249]), and with the model
+inputs it does so after five and ten evaluations (+0.218, CI [+0.111, +0.335],
+and +0.211, CI [+0.117, +0.312]). The transfer cost model stays better than
+the policy with model inputs after five evaluations (+0.234, CI [+0.009,
++0.485]), and the ranking model beats the regression model from miniFE to
+LULESH after ten evaluations (+0.203, CI [+0.012, +0.372]), as on the T4.
+The advantage of RGPE late in the search does not reproduce, because RGPE is
+not better than GP-EI after 30 evaluations ($-$0.034, CI [$-$0.100, +0.037]), and neither does the collapse of the regression model from LULESH to
+miniFE, which reaches 0.85 after ten evaluations while the learned policies do
+poorly. Only three miniFE kernels have headroom on the RTX
+6000 (l254, l290, and l521, two of which are reductions), against five on the
+T4, so this fold tests a different and smaller set of kernels. The regression
+model is also much stronger after one evaluation (0.82 against 0.47 in LOKO).
+
+\begin{table}[t]
+\centering
+\caption{Share of the optimum log speedup on the T4 and the RTX 6000 landscapes
+(T4 / RTX 6000) for the methods of Tables~\ref{tab:rl} and~\ref{tab:learned}.
+LOKO has 11 kernels on the T4 and 9 on the RTX 6000, L$\to$M 5 and 3, and
+M$\to$L 6 and 6.}
+\label{tab:repl-rl}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lccccc}
+\toprule
+& \multicolumn{3}{c}{LOKO} & L$\to$M & M$\to$L \\
+\cmidrule(lr){2-4}
+Method & $n=5$ & 10 & 30 & 10 & 10 \\
+\midrule
+\code{tpe} & .47 / .41 & .59 / .54 & .90 / .85 & .68 / .52 & .51 / .55 \\
+\code{gp\_ei} & .51 / .43 & .81 / .80 & .96 / .96 & .90 / .77 & .74 / .82 \\
+\code{transfer\_ei} & .74 / .86 & .83 / .89 & .97 / .95 & .63 / .85 & .59 / .65 \\
+\code{rl} & .59 / .52 & .74 / .66 & .92 / .82 & .74 / .48 & .69 / .72 \\
+\code{rl\_hybrid} & .64 / .63 & .76 / .75 & .92 / .87 & .80 / .51 & .66 / .69 \\
+\code{rgpe} & .62 / .56 & .89 / .77 & 1.00 / .93 & .55 / .95 & .82 / .83 \\
+\code{transfer\_rank} & .76 / .73 & .91 / .88 & .98 / .98 & .80 / .51 & .80 / .85 \\
+\code{rank\_then\_rgpe} & .76 / .73 & .85 / .83 & .98 / .93 & .99 / .99 & .69 / .77 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Online tuning of LULESH and miniFE}
+The online results of Sections~\ref{sec:learnedtransfer} and~\ref{sec:confirm}
+reproduce. Table~\ref{tab:repl-online} shows the five batch strategies on the
+same five kernels with three seeds, a 300~s cap, and no cache, all validated
+in the same rounds. The ranking model with the patience stop shipped the same
+configurations as \code{combined-batch} (ratio 0.998, CI [0.995, 1.001]), and
+batch confirmation shipped configurations at least as fast as two full
+promotions (ratio 1.002, CI [1.000, 1.004]; 1.003 on the T4). The patience
+stop fired in all 15 runs, batch confirmation reduced the time inside the
+search function from 171~s to 90~s, and \code{rank-confirm} took 2.1 times less
+time end to end than \code{combined-batch} (1.9 times on the T4). Unlike on the
+T4, \code{tpe-batch} shipped 1.9\% slower configurations than the ranking model
+with the patience stop (ratio 1.019, CI [1.000, 1.041]), with 1.62\x{} instead of
+1.69\x{} on l1201 and 1.15\x{} instead of 1.22\x{} on miniFE l290, because it
+screened only 161 configurations within its budget against 239 on the T4. All
+times are about 1.5 times the T4 times, because the full measurements and the
+profiled replays take longer on these kernels, for example 6.3~ms per launch
+on l844.
+
+\begin{table}[t]
+\centering
+\caption{The batch strategies of Table~\ref{tab:confirm} on one GPU (T4 / RTX
+6000; five kernels, three seeds, 300~s cap, no cache). Speedups are true speedups;
+times are means per run.}
+\label{tab:repl-online}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lcccc}
+\toprule
+Strategy & Shipped & Search & End to end & Screens \\
+\midrule
+\code{tpe-batch} & 1.531 / 1.649 & -- & 309~s / 456~s & 239 / 161 \\
+\code{combined-batch} & 1.527 / 1.683 & 106~s / 147~s & 271~s / 445~s & 112 / 122 \\
+\code{rank-batch} (GP stop) & 1.521 / 1.683 & 168~s / 211~s & -- / 357~s & 191 / 223 \\
+\code{rank-batch-patience} & 1.527 / 1.680 & 58~s / 73~s & 176~s / 226~s & 62 / 74 \\
+\code{rank-confirm} & 1.531 / 1.682 & 58~s / 71~s & 140~s / 211~s & -- / 71 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{HeCBench}
+Table~\ref{tab:repl-hec} repeats the offline comparison of
+Section~\ref{sec:hecbench} on 44 kernels, 23 of them with headroom. As on the
+T4, the ranking model was significantly better than TPE and GP-EI after one and
+five evaluations when the tested application was left out of training (for
+example +0.264, CI [+0.108, +0.413], over TPE after five), GP-EI caught up with
+it on the HeCBench kernels after ten evaluations (+0.019, not significant),
+and when trained on LULESH and miniFE only, the regression model was better
+than the ranking model on the HeCBench kernels after five evaluations
+($-$0.184, CI [$-$0.340, $-$0.045]; $-$0.216 on the T4). However, the regression
+model is much stronger on the RTX 6000 landscapes, so the ranking model's lead
+over it is gone (+0.031 after five evaluations in LOKO and $-$0.018 after ten in
+LOAO, neither significant). More training applications also helped a
+different method. On the HeCBench kernels, training on the other applications
+instead of LULESH and miniFE raised the ranking model by +0.309 (CI [+0.159,
++0.475]) after five evaluations and RGPE by only +0.033 (+0.115 after ten,
+CI [$-$0.011, +0.251]), while on the T4 RGPE gained most.
+
+\begin{table}[t]
+\centering
+\caption{Share of the optimum after 5 and 10 evaluations on the 48-kernel landscapes
+(T4 $\to$ RTX 6000; kernels with headroom: 26 and 23, of which 15 and 14 are HeCBench
+kernels).}
+\label{tab:repl-hec}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lccccc}
+\toprule
+Fold & Ranking & Regression & RGPE & GP-EI & TPE \\
+\midrule
+LOKO & .67/.78 $\to$ .71/.83 & .57/.59 $\to$ .68/.78 & .55/.72 $\to$ .59/.77 & .40/.71 $\to$ .38/.76 & .33/.45 $\to$ .32/.46 \\
+LOAO & .57/.72 $\to$ .59/.78 & .54/.61 $\to$ .65/.79 & .49/.65 $\to$ .52/.71 & .40/.71 $\to$ .38/.76 & .33/.45 $\to$ .32/.46 \\
+LOAO, HeCBench & .46/.62 $\to$ .56/.75 & .46/.55 $\to$ .62/.74 & .45/.58 $\to$ .59/.76 & .32/.63 $\to$ .35/.73 & .24/.35 $\to$ .27/.40 \\
+base17, HeCBench & .36/.62 $\to$ .25/.41 & .58/.66 $\to$ .44/.44 & .18/.45 $\to$ .56/.64 & .32/.63 $\to$ .35/.73 & .24/.35 $\to$ .27/.40 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The online results of Sections~\ref{sec:hecbench}, \ref{sec:hecval2},
+and~\ref{sec:refine} reproduce closely (Table~\ref{tab:repl-heconline}). We
+tuned the 14 kernels with headroom with \code{rank-confirm}, with the faster
+tuner (\code{rank-confirm-fast}), with refinement, and with \code{tpe-batch},
+three seeds each, and validated all of them in the same rounds. The ranking
+tuner shipped configurations as fast as \code{tpe-batch} (ratio 0.996, CI
+[0.985, 1.003]; 0.995 on the T4), the faster tuner as fast as the earlier one
+(ratio 0.999; 1.001 on the T4), and refinement improved on the faster tuner by
++0.40\% (CI [0.00\%, +0.91\%]; +0.35\% on the T4) and tied \code{tpe-batch}
+(ratio 0.9993; 0.9995 on the T4) in a third of its end-to-end time.
+Refinement again helped kernels whose optimum lies at few teams, for example
+miniWeather l760 (1.676\x{} to 1.720\x{}, against 1.748\x{} for \code{tpe-batch})
+and S3D l171 (1.416\x{} to 1.446\x{}). The faster tuner reduced the end-to-end time
+by 23\% (171~s to 132~s) instead of 51\% on the T4.
+
+\begin{table}[t]
+\centering
+\caption{Online tuning of the HeCBench kernels with headroom (T4 / RTX 6000; 14
+kernels, three seeds, no cache). On the RTX 6000 all four strategies were
+validated in the same rounds; the T4 values are from
+Tables~\ref{tab:heconline} and~\ref{tab:hecval2} and Section~\ref{sec:refine}.}
+\label{tab:repl-heconline}
+\small
+\begin{tabular}{lccc}
+\toprule
+Strategy & Shipped & End to end & Search \\
+\midrule
+\code{rank-confirm} & 1.560 / 1.637 & 229~s / 171~s & 75~s / 61~s \\
+\code{rank-confirm-fast} & 1.562 / 1.635 & 113~s / 132~s & 59~s / 55~s \\
+\quad + refinement & 1.570 / 1.642 & 121~s / 144~s & -- / 68~s \\
+\code{tpe-batch} & 1.568 / 1.643 & 332~s / 428~s & 182~s / 183~s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Input sensitivity}
+Tuned configurations are also input-specific on the RTX 6000
+(Table~\ref{tab:repl-inputs}). We used the same second inputs as
+Section~\ref{sec:inputs} for 14 kernels with headroom of the six applications.
+Unchanged configurations kept 0.80 of the retuned gain (0.79 on the T4), and
+minisweep l282 at 2.6 times the trip count gained 1.16\x{} unchanged against
+3.41\x{} rescaled or retuned (1.15\x{} and 3.28\x{} on the T4). Rescaling the teams
+again made other kernels slower than the default, for example S3D l171 at the
+smaller input (0.23\x{}) and miniWeather l760 on the larger grid (0.95\x{}; 0.94\x{}
+on the T4). Unlike on the T4, rescaling was not better than the unchanged
+configurations on average (0.82 against 0.80 of the retuned gain), because
+it lost most of the gain of the miniFE reductions at the smaller input
+(1.03\x{} against 1.45\x{} unchanged). One retuned kernel shipped a configuration
+1\% slower than its default (S3D l171 at the smaller input, which has almost
+nothing to gain there).
+
+\begin{table}[t]
+\centering
+\caption{Speedup at a second input of configurations tuned at the first input
+(T4 / RTX 6000; 15 and 14 kernels of six applications).}
+\label{tab:repl-inputs}
+\small
+\begin{tabular}{lccc}
+\toprule
+& Unchanged & Rescaled & Retuned \\
+\midrule
+Speedup at the second input & 1.19 / 1.29 & 1.35 / 1.32 & 1.50 / 1.61 \\
+Ratio to retuned & 0.79 / 0.80 & 0.90 / 0.82 & -- \\
+Kernels worse than retuned by $>$2\% & 12 / 7 & 8 / 7 & -- \\
+Kernels slower than the default & 4 / 2 & 6 / 4 & 0 / 1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Training-set size}
+More training kernels help learned transfer on the RTX 6000 as well
+(Table~\ref{tab:repl-more}). On the 83 new kernels with headroom, training on
+the other applications instead of the original 48 kernels raised the ranking
+model by +0.217 (CI [+0.132, +0.310]) after five evaluations and by +0.127
+(CI [+0.055, +0.201]) after ten, and RGPE by +0.226 (CI [+0.145, +0.311]) after
+one. With about 150 training kernels, the ranking model was significantly
+better for a new application than TPE (+0.274 after five evaluations), GP-EI,
+the regression model ($+$0.071, CI [+0.006, +0.138], after ten), and RGPE
+(+0.091, CI [+0.043, +0.141], after ten), and within known applications the
+regression model caught up with it, as on the T4. However, trained on the 48
+kernels the ranking model was already better than TPE on the new kernels
+after five evaluations (+0.076, CI [+0.011, +0.145]), whereas on the T4 it was
+worse ($-$0.125), so the gain from more training data is smaller on the RTX 6000
+than on the T4. RGPE was not the best first guess (0.45 against 0.46 for the
+ranking model after one evaluation, against 0.46 and 0.38 on the T4).
+
+\begin{table}[t]
+\centering
+\caption{Share of the optimum after 5 and 10 evaluations on all landscapes
+(T4 $\to$ RTX 6000; 162 and 188 kernels, of which 101 and 106 have headroom).}
+\label{tab:repl-more}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lccccc}
+\toprule
+Fold & Ranking & Regression & RGPE & GP-EI & TPE \\
+\midrule
+LOKO & .69/.81 $\to$ .68/.82 & .72/.77 $\to$ .73/.82 & .56/.74 $\to$ .57/.72 & .32/.73 $\to$ .32/.72 & .38/.49 $\to$ .36/.49 \\
+LOAO & .60/.76 $\to$ .63/.79 & .57/.64 $\to$ .60/.72 & .55/.70 $\to$ .54/.70 & .32/.73 $\to$ .32/.72 & .38/.49 $\to$ .36/.49 \\
+LOAO, new kernels & .63/.77 $\to$ .66/.79 & .59/.65 $\to$ .62/.72 & .64/.73 $\to$ .61/.71 & .29/.74 $\to$ .31/.71 & .40/.50 $\to$ .37/.50 \\
+LOAO48, new kernels & .27/.43 $\to$ .45/.67 & .55/.67 $\to$ .44/.52 & .48/.60 $\to$ .56/.76 & .29/.74 $\to$ .31/.71 & .40/.50 $\to$ .37/.50 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Summary}
+The replication supports the main recommendations of this report on a second
+GPU. The ranking model with batch screening, the patience stop, and batch
+confirmation ships the same configurations as the slower batch strategies and
+as batch TPE in a fraction of their time, the faster tuner and refinement
+behave as on the T4, tuned configurations must be retuned or validated at a
+new input, and learned transfer to new applications improves with the number
+of training kernels. The results that did not reproduce are the advantage of
+RGPE late in the search, the collapse of the regression model from LULESH to
+miniFE, and the ranking model's lead over the regression model at 48 training
+kernels. The first two rest on a few kernels whose headroom differs between
+the GPUs, and the third reflects a stronger regression model on the RTX 6000
+landscapes, so the choice between the two transfer models at small training
+sets depends on the GPU.
+
+
+%=============================================================================
 \section{Discussion and recommendations}
 \label{sec:discussion}
 
@@ -2261,9 +2592,13 @@ model within the same applications, although it transfers better to a new
 application (Section~\ref{sec:rl}).
 
 \subsection{Limitations}
-A limitation of this study is that it used one GPU model, the T4, which has a
-low power limit and weak FP64 throughput, which affects both the bottleneck
-classes and the time-energy trade-off. Most sections use two proxy
+A limitation of this study is that most of it used one GPU model, the T4, which
+has a low power limit and weak FP64 throughput, which affects both the
+bottleneck classes and the time-energy trade-off. Section~\ref{sec:replication}
+repeats Sections~\ref{sec:rl} to~\ref{sec:more} on a Quadro RTX 6000 of the same
+architecture, but the measurement, search-strategy, and energy results of the
+earlier sections were not replicated, and no GPU of another architecture was
+tested. Most sections use two proxy
 applications with one recorded input each; Section~\ref{sec:hecbench} adds ten
 HeCBench applications and Section~\ref{sec:more} 114 more kernels, with inputs
 chosen to fit the timing range and a second input for six applications
@@ -2337,7 +2672,13 @@ stub, and the recordings are in \code{/data2/nmn/rr-metrics/hecbench}, and the
 application wrappers are commit \code{126201dce}
 (\code{record-replay/RR/benchmarks/hecbench}).
 Optuna~3.6.1 is not part of the container, and the studies installed it in an
-experiment-local directory on \code{PYTHONPATH}. Table~\ref{tab:env} lists the
+experiment-local directory on \code{PYTHONPATH}. The replication of
+Section~\ref{sec:replication} is kept outside the repository in
+\code{rtx6000-replication/}, with its drivers (\code{landscape.py},
+\code{classify.py}, \code{offline.py}, \code{online.py}, \code{validate.py},
+\code{inputs.py}), the changes to the tuner (\code{rtx6000-port.patch} against
+commit \code{454c76f00}), the landscapes, classes, per-run results,
+validation rounds, logs, and a \code{REPORT.md} summary. Table~\ref{tab:env} lists the
 environment variables that control the new behavior.
 
 \begin{table}[t]
