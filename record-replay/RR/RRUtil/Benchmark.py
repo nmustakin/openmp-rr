@@ -16,8 +16,7 @@ import pandas as pd
 import re
 
 from bayes_opt import BayesianOptimization, UtilityFunction
-import pynvml
-from pynvml import nvmlDeviceGetTotalEnergyConsumption as nvmlEnergy
+from RRUtil.GPUMonitor import get_monitor
 
 from RRUtil import Device
 from RRUtil.Utilities import createDir
@@ -33,6 +32,7 @@ class Kernel:
     # Overridable from the environment for measurement experiments.
     TimingWarmup = int(os.environ.get('RR_TIMING_WARMUP', 3))
     # Clocks ramp from idle over ~0.5 s on T4; time the kernel only after.
+    # Devices may lower the default (Device.TimingWarmupMs, set per Kernel).
     TimingWarmupMs = int(os.environ.get('RR_TIMING_WARMUP_MS', 1000))
     TimingRepeats = int(os.environ.get('RR_TIMING_REPEATS', 10))
     EnergyMinMs = int(os.environ.get('RR_ENERGY_MIN_MS', 300))
@@ -114,6 +114,9 @@ class Kernel:
             return ' '.join([f'{k}={v}' for k,v in env_vars.items()])
 
     def __init__(self, Device, name, hashname, dbDir, recorded=True):
+        if 'RR_TIMING_WARMUP_MS' not in os.environ:
+            Kernel.TimingWarmupMs = getattr(Device, 'TimingWarmupMs',
+                                            Kernel.TimingWarmupMs)
         self.Name = name
         self.recorded = recorded
         self.HashName = hashname
@@ -1107,7 +1110,7 @@ class Kernel:
 
         `jobs` is a list of (device ordinal, [configs, configs, ...]); each inner
         list shares one binary and is timed with sample_batch. Each job runs in a
-        forked process with CUDA_VISIBLE_DEVICES restricted to its GPU and its own
+        forked process restricted to its GPU (CUDA/ROCR_VISIBLE_DEVICES) and its own
         working directory. Returns, per job, the list of sample_batch results.
         """
         def fallback(groups):
@@ -1118,12 +1121,13 @@ class Kernel:
 
     def _run_on_devices(self, jobs, fallbacks=None):
         """Run callables concurrently, one forked process per (device ordinal, fn),
-        each with CUDA_VISIBLE_DEVICES restricted to its GPU and its own working
+        each restricted to its GPU (CUDA/ROCR_VISIBLE_DEVICES) and its own working
         directory (device ordinals must be distinct). Returns the results in order."""
         import multiprocessing as mp
         assert len({d for d, _ in jobs}) == len(jobs), 'one job per device'
         ctx = mp.get_context('fork')
-        visible = [v.strip() for v in os.environ.get('CUDA_VISIBLE_DEVICES', '').split(',')
+        visible_env = get_monitor().visible_env
+        visible = [v.strip() for v in os.environ.get(visible_env, '').split(',')
                    if v.strip()]
         dirs = {d: self._device_workdir(d) for d, _ in jobs}
         queue = ctx.Queue()
@@ -1131,8 +1135,8 @@ class Kernel:
         def run(i, d, fn):
             try:
                 os.chdir(dirs[d])
-                os.environ['CUDA_VISIBLE_DEVICES'] = visible[d] if visible else str(d)
-                pynvml.nvmlInit()
+                os.environ[visible_env] = visible[d] if visible else str(d)
+                get_monitor().init_child()
                 queue.put((i, True, fn()))
             except Exception as e:          # report, do not hang the parent
                 print(f'Replay on device {d} failed: {e!r}', flush=True)
@@ -1164,7 +1168,7 @@ class Kernel:
         """
         lb = {k: configs[0][k] for k in ('MaxThreads', 'MinTeams')
               if configs[0].get(k) is not None}
-        device_handle = self._nvml_handle(deviceID)
+        device_handle = self._gpu_handle(deviceID)
         stats = self.Profiler.deviceCompile(self.original, self.Name, self.HashName, **lb)
         regs = stats[self.Name][0] if stats and self.Name in stats else None
         out = [None] * len(configs)
@@ -1230,7 +1234,7 @@ class Kernel:
         NumThreads = kwargs.get('NumThreads', None)
         NumTeams = kwargs.get('NumTeams', None)
        
-        device_handle = self._nvml_handle(deviceID)
+        device_handle = self._gpu_handle(deviceID)
         StaticStats = self.Profiler.deviceCompile(self.original, self.Name, self.HashName, **kwargs)
         SStats = None
         if StaticStats:
@@ -1252,33 +1256,19 @@ class Kernel:
         #stats = np.array(DStats)[:,-3]
         end = time.time()
         #end energy here
-        end_energy = nvmlEnergy(device_handle)
+        end_energy = get_monitor().energy_mj(device_handle)
 
         return True, SStats, DStats, durations, energies, GLoads, GStores
 
     @staticmethod
-    def _nvml_handle(cuda_ordinal):
-        """NVML handle for a CUDA device ordinal.
-
-        NVML ignores CUDA_VISIBLE_DEVICES, so map the ordinal through it
-        (numeric entries, CUDA_DEVICE_ORDER=PCI_BUS_ID assumed).
-        """
-        visible = os.environ.get('CUDA_VISIBLE_DEVICES')
-        if visible:
-            entries = [v.strip() for v in visible.split(',') if v.strip()]
-            if all(v.isdigit() for v in entries) and cuda_ordinal < len(entries):
-                return pynvml.nvmlDeviceGetHandleByIndex(int(entries[cuda_ordinal]))
-        return pynvml.nvmlDeviceGetHandleByIndex(cuda_ordinal)
+    def _gpu_handle(ordinal):
+        """GPUMonitor handle for a device ordinal (mapped through
+        CUDA_VISIBLE_DEVICES or ROCR_VISIBLE_DEVICES)."""
+        return get_monitor().handle(ordinal)
 
     @staticmethod
     def _foreign_gpu_processes(device_handle):
-        if device_handle is None:
-            return []
-        try:
-            procs = pynvml.nvmlDeviceGetComputeRunningProcesses(device_handle)
-        except pynvml.NVMLError:
-            return []
-        return [p.pid for p in procs if p.pid != os.getpid()]
+        return get_monitor().foreign_pids(device_handle)
 
     def _wait_for_exclusive_gpu(self, device_handle):
         waited = 0

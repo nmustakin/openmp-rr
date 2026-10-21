@@ -126,12 +126,49 @@ processes with 3 s warm-up; data in `~/rr-amd-work/clock-ramp/l1721.csv`):
   From the second launch on, every process is at 1725 MHz.
 - Cross-process CV of the median is 0.03% cold and 0.04% warm. On the T4 it
   was 8.4%.
-- So the T4's 1000 ms warm-up is unnecessary on MI50; a few warm-up launches
-  suffice. Confirm on a short kernel (l2103) before lowering the AMD defaults.
+- Short kernels need longer to settle:
+  - LULESH l2103 (0.42 ms): about 20 launches.
+  - miniFE l254 (0.79 ms): about 6 launches.
+- Warm-up sweep on l2103 (interleaved, 6 rounds, one GPU;
+  `sweep-l2103.csv`):
 
-Remaining for phase 2:
-- Hardware metrics through rocprofiler v1.
-- `kernel_activities.csv`.
+  | Warm-up | Median vs 0 ms | CV |
+  |---|---|---|
+  | 0 ms (3 launches only) | — | 0.43% |
+  | 30 ms | −1.13% | 0.21% |
+  | 100 ms | −1.20% | 0.09% |
+  | 300 ms | −1.20% | 0.11% |
+  | 1000 ms | −1.20% | 0.08% |
+  | 3000 ms | −1.23% | 0.14% |
+
+- **AMD default is therefore 100 ms** (`Device.AMDGPU.TimingWarmupMs`;
+  `RR_TIMING_WARMUP_MS` still overrides). NVIDIA keeps 1000 ms.
+- Open: in the cold-vs-warm ramp on GPU 1, warmed l2103 processes were 1%
+  *slower* than cold ones, at the same reported clock. The sweep on GPU 3 did
+  not reproduce this. Check GPU-to-GPU differences in phase 5.
+
+**Metrics** (`a0a7ad346`): rocprof runs four counter passes, one replay
+process each, so every pass starts from the recorded inputs. Plugin-side
+rocprofiler collection was dropped: kernel packets have no barrier bit, so
+its start/stop packets would not be ordered around the kernel. rocprof also
+writes the `kernel_activities.csv` the tuner reads. Validation:
+- vAdd: DRAM reads 128 MB and writes 64 MB, both exact.
+- Waves per CU: 1.00 for 60 single-wave teams; 15.4 on l649 for 16 expected.
+
+### Phase 3 progress
+
+- `RRUtil/GPUMonitor.py`. The NVML monitor keeps the previous behavior. The
+  AMD monitor uses:
+  - KFD sysfs queues for the exclusive-GPU guard;
+  - ROCm order plus `ROCR_VISIBLE_DEVICES` for ordinal mapping;
+  - ROCm SMI for energy. Process-level board energy is NaN on MI50.
+- No pynvml/pycuda import on the AMD path.
+- Python: the tuner needs Python 3.9+ (`argparse.BooleanOptionalAction`); the
+  system Python is 3.8.
+  - Use `python3.10` with
+    `PYTHONPATH=~/rr-amd-work/pylib`.
+  - That pylib holds the requirements without pycuda, plus optuna 3.6.1 and
+    xgboost 2.1.4.
 
 ## Phase 2: AMDGPU plugin measurement (`plugins-nextgen/amdgpu`)
 

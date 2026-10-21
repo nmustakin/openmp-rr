@@ -10,14 +10,17 @@ import numpy as np
 import argparse
 from importlib import import_module
 import pandas as pd
-import pynvml
-from pynvml import nvmlDeviceGetTotalEnergyConsumption as nvmlEnergy
 from concurrent.futures import ProcessPoolExecutor
-
-pynvml.nvmlInit()
 
 script = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(script)
+from RRUtil.GPUMonitor import get_monitor
+
+
+def boardEnergy(device_handle):
+    """Board energy counter in mJ; NaN where the GPU has none (MI50)."""
+    value = get_monitor().energy_mj(device_handle)
+    return float('nan') if value is None else value
 import inspect
 
 import RRUtil.Benchmark as Benchmark
@@ -38,8 +41,9 @@ def getUserClass(pathToCLS):
   raise ImportError("Could Not find Benchmark description in {0}".format(pathToCLS))
 
 def executeOnGPU(kernelName, algorithm, optParams, gpuID, bench): 
-  os.environ["CUDA_VISIBLE_DEVICES"] = str(gpuID)
-  print("Executing on GPU ", os.environ["CUDA_VISIBLE_DEVICES"])
+  visible_env = get_monitor().visible_env
+  os.environ[visible_env] = str(gpuID)
+  print("Executing on GPU ", os.environ[visible_env])
   kernel = bench.getKernels('record')[kernelName]
 
   if algorithm == 'bo':
@@ -48,7 +52,7 @@ def executeOnGPU(kernelName, algorithm, optParams, gpuID, bench):
     kernel.optimize_exhaustive(**optParams, Policy='exhaustive', device=gpuID)
   else: 
     assert False, 'opt must be BO or Exhaustive'      
-  print("Done executing on GPU ", os.environ["CUDA_VISIBLE_DEVICES"])
+  print("Done executing on GPU ", os.environ[visible_env])
 
 
 def main():
@@ -78,6 +82,7 @@ def main():
     visualize = args.visualize
     make_best = args.run
     print_record = args.rkernel
+    get_monitor(args.device)
     device = Device.getDevice(args.device, args.tmpDir)
     store_best = args.save
     initSteps = args.initSamples
@@ -138,18 +143,18 @@ def main():
             bench.clean()
             
             build_start = time.time()
-            device_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-            build_start_energy = nvmlEnergy(device_handle)
+            device_handle = get_monitor().handle(0)
+            build_start_energy = boardEnergy(device_handle)
             bench.build()
-            build_end_energy = nvmlEnergy(device_handle)
+            build_end_energy = boardEnergy(device_handle)
             build_end = time.time()
             print("Build Energy = ", build_end_energy - build_start_energy)
             
             rr_start = time.time()
-            rr_start_energy = nvmlEnergy(device_handle)
+            rr_start_energy = boardEnergy(device_handle)
             app_time, kernels = bench.execute(Record=True)
             rr_end = time.time()
-            rr_end_energy = nvmlEnergy(device_handle)
+            rr_end_energy = boardEnergy(device_handle)
             print("Record Energy = ", rr_end_energy - rr_start_energy)
             
             bench.register_variant('record', build_end - build_start, rr_end - rr_start, 
@@ -157,10 +162,10 @@ def main():
                                     rr_end_energy - rr_start_energy, kernels)
 
             rr_start = time.time()
-            rr_start_energy = nvmlEnergy(device_handle)
+            rr_start_energy = boardEnergy(device_handle)
             app_time, kernels = bench.execute(Record=False)
             rr_end = time.time()
-            rr_end_energy = nvmlEnergy(device_handle)
+            rr_end_energy = boardEnergy(device_handle)
             print("Original Energy = ", rr_end_energy - rr_start_energy)
 
             bench.register_variant('original',build_end - build_start, rr_end - rr_start,
@@ -268,12 +273,12 @@ def main():
                 bench.build(fn=fn, useCase=args.scenario)
                 build_end = time.time()
 
-                device_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                device_handle = get_monitor().handle(0)
                 opt_rstart = time.time()
-                opt_rstart_energy = nvmlEnergy(device_handle)
+                opt_rstart_energy = boardEnergy(device_handle)
                 app_time, kernels = bench.execute(Record=False)
                 opt_rend = time.time()
-                opt_rend_energy = nvmlEnergy(device_handle)
+                opt_rend_energy = boardEnergy(device_handle)
                 print("Record Energy = ", rr_end_energy - rr_start_energy)
 
                 bench.register_variant(args.scenario, build_end - build_start, 

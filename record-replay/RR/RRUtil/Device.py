@@ -410,6 +410,10 @@ class AMDGPU(metaclass=DeviceSingleton):
         'TCC_HIT_sum TCC_MISS_sum MemUnitBusy',
     ]
 
+    # MI50 has no multi-step clock ramp: a 0.42 ms kernel settles within ~20
+    # launches, and warm-ups of 100 ms to 3 s give the same median.
+    TimingWarmupMs = 100
+
     def __init__(self, StageDir=None, device=0):
         self.Target='amdgcn-amd-amdhsa'
         self.StageDir = StageDir
