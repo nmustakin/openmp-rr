@@ -23,6 +23,7 @@
 #include <mutex>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <unistd.h>
 #include <unordered_map>
 #include <sys/mman.h>
@@ -89,10 +90,15 @@ struct Frequencies {
   uint64_t Frequency[32];
 };
 typedef int (*ClockFn)(uint32_t, int, Frequencies *);
+typedef int (*PowerFn)(uint32_t, uint32_t, uint64_t *);
 static EnergyFn GetEnergy = nullptr;
 static ClockFn GetClock = nullptr;
+static PowerFn GetPower = nullptr;
 static uint32_t Index = 0;
 static bool Found = false;
+// Whether the energy accumulator works. On MI50 (Vega 20) it reads a constant
+// 0xFFFFFFFF, and energy is integrated from the average power instead.
+static bool HaveCounter = false;
 
 static bool init(hsa_agent_t Agent) {
   static std::once_flag Once;
@@ -108,6 +114,7 @@ static bool init(hsa_agent_t Agent) {
     auto PciId = (PciIdFn)dlsym(Lib, "rsmi_dev_pci_id_get");
     GetEnergy = (EnergyFn)dlsym(Lib, "rsmi_dev_energy_count_get");
     GetClock = (ClockFn)dlsym(Lib, "rsmi_dev_gpu_clk_freq_get");
+    GetPower = (PowerFn)dlsym(Lib, "rsmi_dev_power_ave_get");
     uint32_t Bdf = 0, Domain = 0, Count = 0;
     if (!Init || !NumDevices || !PciId || Init(0) != 0 ||
         NumDevices(&Count) != 0 ||
@@ -129,7 +136,9 @@ static bool init(hsa_agent_t Agent) {
       return;
     uint64_t Counter, Stamp;
     float Resolution;
-    Ok = GetEnergy && GetEnergy(Index, &Counter, &Resolution, &Stamp) == 0;
+    HaveCounter = GetEnergy &&
+                  GetEnergy(Index, &Counter, &Resolution, &Stamp) == 0 &&
+                  Counter != UINT32_MAX && Counter != UINT64_MAX;
   });
   return Found;
 }
@@ -146,12 +155,63 @@ static unsigned smClockMHz() {
 static bool energyMilliJoules(double &Value) {
   uint64_t Counter, Stamp;
   float Resolution;
-  if (!Found || !GetEnergy || GetEnergy(Index, &Counter, &Resolution, &Stamp))
+  if (!HaveCounter || GetEnergy(Index, &Counter, &Resolution, &Stamp))
     return false;
   // The counter is in units of Resolution microjoules.
   Value = double(Counter) * Resolution / 1.0e3;
   return true;
 }
+
+static bool powerWatts(double &Value) {
+  uint64_t MicroWatts;
+  if (!Found || !GetPower || GetPower(Index, 0, &MicroWatts))
+    return false;
+  Value = MicroWatts / 1.0e6;
+  return true;
+}
+
+// Samples the average power (updated about every 8 ms on MI50) while it is
+// alive, for devices without a usable energy counter.
+class PowerIntegrator {
+  using Clock = std::chrono::steady_clock;
+  std::atomic<bool> Stop{false};
+  std::vector<std::pair<Clock::time_point, double>> Samples;
+  bool Ok = true;
+  std::thread Sampler;
+
+public:
+  PowerIntegrator() {
+    Sampler = std::thread([this]() {
+      while (!Stop.load()) {
+        double W = 0;
+        if (!powerWatts(W)) {
+          Ok = false;
+          return;
+        }
+        Samples.emplace_back(Clock::now(), W);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+      }
+    });
+  }
+  // Stops sampling and integrates the power over [Begin, End] in millijoules,
+  // holding each sample until the next one. Returns false if a reading failed.
+  bool finish(Clock::time_point Begin, Clock::time_point End, double &Value) {
+    Stop.store(true);
+    Sampler.join();
+    Value = 0;
+    if (!Ok || Samples.empty())
+      return false;
+    for (size_t I = 0; I < Samples.size(); ++I) {
+      auto From = std::max(Samples[I].first, Begin);
+      auto To = std::min(I + 1 < Samples.size() ? Samples[I + 1].first : End,
+                         End);
+      if (To > From)
+        Value += Samples[I].second *
+                 std::chrono::duration<double, std::milli>(To - From).count();
+    }
+    return true;
+  }
+};
 } // namespace rrsmi
 
 namespace utils {
@@ -2693,7 +2753,11 @@ Error AMDGPUKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
         std::max(1L, (long)std::ceil(EnergyMinMs / std::max(MedianMs, 1e-3)));
     Launches = std::min(Launches, 1000000L);
     double E0 = 0, E1 = 0;
-    bool Ok = rrsmi::energyMilliJoules(E0);
+    const bool UseCounter = rrsmi::HaveCounter;
+    bool Ok = !UseCounter || rrsmi::energyMilliJoules(E0);
+    std::unique_ptr<rrsmi::PowerIntegrator> Integrator;
+    if (!UseCounter)
+      Integrator = std::make_unique<rrsmi::PowerIntegrator>();
     auto T0 = std::chrono::steady_clock::now();
     for (long I = 0; I < Launches; ++I) {
       if (auto Err = Launch(nullptr))
@@ -2705,13 +2769,16 @@ Error AMDGPUKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
     if (auto Err = Stream.synchronize())
       return Err;
     auto T1 = std::chrono::steady_clock::now();
-    Ok = Ok && rrsmi::energyMilliJoules(E1);
+    if (UseCounter)
+      Ok = Ok && rrsmi::energyMilliJoules(E1);
+    else
+      Ok = Integrator->finish(T0, T1, E1);
     double Seconds = std::chrono::duration<double>(T1 - T0).count();
     if (Ok && E1 > E0)
       printf("||ReplayEnergy|| joules_per_launch: %.9g avg_power_w: %.6g "
-             "launches: %ld window_seconds: %.6g\n",
+             "launches: %ld window_seconds: %.6g method: %s\n",
              (E1 - E0) / 1.0e3 / Launches, (E1 - E0) / 1.0e3 / Seconds,
-             Launches, Seconds);
+             Launches, Seconds, UseCounter ? "counter" : "power_average");
     else
       printf("||ReplayEnergy|| unavailable\n");
   }
