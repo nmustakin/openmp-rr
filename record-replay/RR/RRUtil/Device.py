@@ -307,6 +307,14 @@ class NVIDIA(metaclass=DeviceSingleton):
     def recordPrefix(self):
         return ''
 
+    def metricsCommand(self, cmd):
+        return f'timeout 180s {cmd}'
+
+    def parseMetrics(self, stdout, activitiesFile):
+        """All metrics printed by the plugin."""
+        return {m.group(1): float(m.group(2)) for m in re.finditer(
+            r'\|\|NVMetric\|\| (\S+): (\S+)', stdout)}
+
     def getRecordMem(self):
         return 4
 
@@ -364,20 +372,63 @@ class NVIDIA(metaclass=DeviceSingleton):
         except ImportError:
             raise Exception('NVIDIA requires pycuda installed')
 
+def _rocm_path():
+    return os.environ.get('ROCM_PATH', '/opt/rocm')
+
+
+def _query_amd_agents():
+    """GPU agents reported by rocminfo, in ROCR order, as dicts with the
+    fields the tuner needs. Empty if rocminfo is unavailable."""
+    try:
+        out = subprocess.run([f'{_rocm_path()}/bin/rocminfo'], capture_output=True,
+                             text=True, timeout=60).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    agents = []
+    for block in out.split('*******')[1:]:
+        if 'Device Type:             GPU' not in block:
+            continue
+        def field(name, cast=int):
+            m = re.search(rf'^\s*{name}:\s*(\S+)', block, re.M)
+            return cast(m.group(1).split('(')[0]) if m else None
+        agents.append({'Arch': field('Name', str), 'CUs': field('Compute Unit'),
+                       'WaveSize': field('Wavefront Size'),
+                       'MaxWavesPerCU': field('Max Waves Per CU'),
+                       'MaxBlock': field('Workgroup Max Size')})
+    return agents
+
+
 class AMDGPU(metaclass=DeviceSingleton):
     __loaded__ = False
+    # Per-pass rocprof counter sets (each line is one replay process). They
+    # fit the gfx906 counter limits; SQ_ACCUM_PREV must follow SQ_LEVEL_WAVES.
+    MetricPasses = [
+        'SQ_LEVEL_WAVES SQ_ACCUM_PREV SQ_WAVES SQ_INSTS_VALU SQ_INSTS_VMEM_RD '
+        'SQ_INSTS_VMEM_WR SQ_ACTIVE_INST_VALU SQ_INSTS_SALU GRBM_GUI_ACTIVE GRBM_COUNT',
+        'FETCH_SIZE',
+        'WRITE_SIZE',
+        'TCC_HIT_sum TCC_MISS_sum MemUnitBusy',
+    ]
+
     def __init__(self, StageDir=None, device=0):
-        self.NumDevices = 8
         self.Target='amdgcn-amd-amdhsa'
-        self.Arch = 'gfx90a'
         self.StageDir = StageDir
+        agents = _query_amd_agents()
+        self.NumDevices = len(agents) or 8
+        # Defaults are the MI50 (gfx906) when rocminfo is unavailable.
+        agent = agents[device] if device < len(agents) else {}
+        self.Arch = agent.get('Arch') or 'gfx906'
+        self.CUs = agent.get('CUs') or 60
+        self.MaxWavesPerCU = agent.get('MaxWavesPerCU') or 40
+        # HBM2 peak of the MI50/MI60, for DRAM throughput as a percentage.
+        self.PeakDramBytesPerSec = float(os.environ.get('RR_AMD_PEAK_DRAM_GBS', 1024)) * 1e9
 
         if device < self.NumDevices:
-            print(f'Setting up device {device} from {self.NumDevices}')
-            self.TotalMemory = 68702699520
-            self.WarpSize = 64
-            self.ThreadsSMP = 2048
-            self.WarpsSMP = 32
+            print(f'Setting up device {device} ({self.Arch}) from {self.NumDevices}')
+            self.TotalMemory = 16 * 1024**3
+            self.WarpSize = agent.get('WaveSize') or 64
+            self.ThreadsSMP = self.MaxWavesPerCU * self.WarpSize
+            self.WarpsSMP = self.MaxWavesPerCU
             self.SharedMemoySMP = 65536
             self.MaxSharedMemBlock = 65536
             self.MaxRegBlock = 0
@@ -387,7 +438,10 @@ class AMDGPU(metaclass=DeviceSingleton):
             # XXX: rocprof with --stats APPENDS to the <kernel name>.json name,
             # making it unusable for the replay. We use timestamps and calculate
             # the duration the same as --stats does.
-            self._profile = 'rocprof --timestamp on -o {output} {executable}'
+            # Recording runs write the per-dispatch rocprof CSV to the file
+            # name the CUDA plugin uses; parse() reads its columns.
+            self._profile = (f'{_rocm_path()}/bin/rocprof --timestamp on '
+                             '-o kernel_activities.csv {executable}')
             self._env = ''
             self.Name = 'amd'
             #self.optConfigs = [ ['NumWarps', 'NumTeams', 'FlatWorkGroupSize', 'WavesPerEU' ], [ 'NumWarps', 'NumTeams' ] ]
@@ -406,9 +460,9 @@ class AMDGPU(metaclass=DeviceSingleton):
             }
 
     def getMaxMem(self):
-        # MI50 has 16 GB. Asking for more makes the replay region step down
-        # through failed allocations. TODO: query the device.
-        return 15
+        # Asking for more than the device has makes the replay region step
+        # down through failed allocations.
+        return int(self.TotalMemory // 1024**3) - 1
 
     def isValidConfig(self, NumThreads, NumTeams):
         return NumThreads * NumTeams <= self.ThreadsSMP
@@ -498,17 +552,86 @@ class AMDGPU(metaclass=DeviceSingleton):
         grp_columns = ['Name','gpu-id','grd','wgr','lds','scr', 'arch_vgpr','accum_vgpr','sgpr','wave_size']
         df = df.groupby(grp_columns).mean().reset_index()
         df['Name'] = df['Name'].str.replace('.kd', '', regex=False)
-        df = df.set_index('Name')
+        # Same keys, in the same order, as NVIDIA.parse (the tuner stores the
+        # values positionally); AMD-only fields follow. rocprof's grd counts
+        # work-items, CUPTI's Grid X counts blocks.
+        df = pd.DataFrame({
+            'Name': df['Name'], 'Device': df['gpu-id'],
+            'Grid X': (df['grd'] // df['wgr']).astype('int32'),
+            'Block X': df['wgr'].astype('int32'),
+            'Registers Per Thread': (df['arch_vgpr'] + df['accum_vgpr']).astype('int32'),
+            'Static SMem': df['lds'].astype('float32'),
+            'Dynamic SMem': 0.0,
+            'Duration': df['Duration'].astype('float32'),
+            'SGPRs': df['sgpr'].astype('int32'),
+            'Scratch': df['scr'].astype('float32'),
+        }).set_index('Name')
         pd.options.display.max_colwidth = 1000
         if keepMaxTeam:
-            idx = df.groupby(['Name'])['grd'].transform(max) == df['grd']
+            idx = df.groupby(['Name'])['Grid X'].transform(max) == df['Grid X']
             df = df[idx]
 
         if dropSingleTeams:
-            idx = df.groupby(['Name'])['grd'].transform(max) != 1
+            idx = df.groupby(['Name'])['Grid X'].transform(max) != 1
             df = df[idx]
 
         return df.to_dict(orient='index')
+
+    def _rocprofMetricsDir(self):
+        """Directory holding rr_metrics.xml next to symlinks to the ROCm
+        metrics files, because rocprofiler only resolves relative includes."""
+        lib = Path(_rocm_path()) / 'lib' / 'rocprofiler'
+        d = Path(os.environ.get('TMPDIR', '/tmp')) / f'rr-rocprof-{os.getuid()}'
+        d.mkdir(parents=True, exist_ok=True)
+        for name in ['metrics.xml', 'gfx_metrics.xml']:
+            link = d / name
+            if not link.exists():
+                link.symlink_to(lib / name)
+        shutil.copyfile(Path(__file__).parent / 'amd' / 'rr_metrics.xml',
+                        d / 'rr_metrics.xml')
+        (d / 'passes.txt').write_text(
+            ''.join(f'pmc: {p}\n' for p in self.MetricPasses))
+        return d
+
+    def metricsCommand(self, cmd):
+        """Metrics replay: rocprof runs one replay process per counter pass,
+        so every pass starts from the recorded inputs."""
+        d = self._rocprofMetricsDir()
+        timeout = 180 * len(self.MetricPasses)
+        return (f'timeout {timeout}s {_rocm_path()}/bin/rocprof -m {d}/rr_metrics.xml '
+                f'-i {d}/passes.txt --timestamp on -o kernel_activities.csv {cmd}')
+
+    def parseMetrics(self, stdout, activitiesFile):
+        """Counters of the profiled dispatch and metrics derived from them."""
+        df = pd.read_csv(activitiesFile)
+        df = df[df.KernelName.str.contains('__omp_offloading', na=False)]
+        if df.empty:
+            return {}
+        r = df.iloc[-1]
+        counters = [c for p in self.MetricPasses for c in p.split()]
+        m = {c: float(r[c]) for c in counters if c in r and pd.notna(r[c])}
+        seconds = (r['EndNs'] - r['BeginNs']) * 1e-9
+        m['gpu_time_seconds'] = seconds
+        gui = m.get('GRBM_GUI_ACTIVE')
+        if gui:
+            waves = 4 * m.get('SQ_ACCUM_PREV', 0) / gui / self.CUs
+            m['waves_per_cu'] = waves
+            m['achieved_occupancy_pct'] = 100 * waves / self.MaxWavesPerCU
+            m['valu_busy_pct'] = (100 * m.get('SQ_ACTIVE_INST_VALU', 0) * 4
+                                  / (4 * self.CUs) / gui)
+        if 'FETCH_SIZE' in m:
+            m['dram_read_bytes'] = m['FETCH_SIZE'] * 1024
+        if 'WRITE_SIZE' in m:
+            m['dram_write_bytes'] = m['WRITE_SIZE'] * 1024
+        if seconds > 0 and 'FETCH_SIZE' in m and 'WRITE_SIZE' in m:
+            m['dram_throughput_pct'] = (100 * (m['dram_read_bytes'] + m['dram_write_bytes'])
+                                        / seconds / self.PeakDramBytesPerSec)
+        hits, misses = m.get('TCC_HIT_sum'), m.get('TCC_MISS_sum')
+        if hits is not None and misses is not None and hits + misses > 0:
+            m['l2_hit_pct'] = 100 * hits / (hits + misses)
+        # Per-work-item scratch (spills and stack), from the code object.
+        m['scratch_bytes'] = float(r['scr'])
+        return m
 
     #This is not needed for AMD AFAIK. Keep it though
     def renameSymbols(self, inputName, outName):

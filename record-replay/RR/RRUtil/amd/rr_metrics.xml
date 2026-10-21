@@ -1,0 +1,16 @@
+#include "metrics.xml"
+
+# Extra gfx906 (MI50/MI60) SQ counters for the record-replay tuner. rocprofiler
+# only resolves relative includes, so Device.AMDGPU places this file next to
+# symlinks to the ROCm metrics.xml and gfx_metrics.xml. Event ids follow the
+# gfx9 SQ_PERF_SEL numbering (they match the gfx90a ids below event 26).
+# Occupancy: SQ_ACCUM_PREV accumulates SQ_LEVEL_WAVES, the number of waves in
+# flight, every quad-cycle; waves per CU = 4 * SQ_ACCUM_PREV / GRBM_GUI_ACTIVE /
+# CUs (validated on MI50: 60 single-wave teams give exactly 1.0).
+<gfx906>
+  <metric name="SQ_ACCUM_PREV" block=SQ event=1 descr="Accumulate the previous counter every quad-cycle."></metric>
+  <metric name="SQ_CYCLES" block=SQ event=2 descr="Clock cycles."></metric>
+  <metric name="SQ_BUSY_CYCLES" block=SQ event=3 descr="Clock cycles while SQ is reporting that it is busy."></metric>
+  <metric name="SQ_LEVEL_WAVES" block=SQ event=5 descr="Number of waves in flight (level); collect with SQ_ACCUM_PREV."></metric>
+  <metric name="SQ_BUSY_CU_CYCLES" block=SQ event=13 descr="Quad-cycles a CU is busy."></metric>
+</gfx906>

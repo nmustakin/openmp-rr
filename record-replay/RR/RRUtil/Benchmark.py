@@ -1364,7 +1364,10 @@ class Kernel:
         # Metrics are deterministic enough for optimization and expensive to
         # collect, so profile them once after all timing/energy samples.
         activities_file.unlink(missing_ok=True)
-        ret, stdout, stderr = execute_command(metrics_env + ' timeout 180s ' + cmd,
+        # NVIDIA: the plugin prints the metrics; AMD: rocprof runs one replay
+        # per counter pass and writes them to the activities file.
+        ret, stdout, stderr = execute_command(
+                metrics_env + ' ' + self.Profiler.metricsCommand(cmd),
                 capture_output=True, cwd=os.getcwd(),
                 shell=True, ContinueOnFailure=True)
         if ret != 0:
@@ -1375,12 +1378,12 @@ class Kernel:
             kernelDescr = self.Profiler.parse(str(activities_file),
                                               keepMaxTeam,
                                               dropSingleTeams)[self.Name]
+            # All profiled metrics, plus the SM clock seen during the timing
+            # replays. Stored per config via DB.SetMetrics.
+            self.LastMetrics = self.Profiler.parseMetrics(stdout,
+                                                          str(activities_file))
         finally:
             activities_file.unlink(missing_ok=True)
-        # All metrics printed by the plugin, plus the SM clock seen during
-        # the timing replays. Stored per config via DB.SetMetrics.
-        self.LastMetrics = {m.group(1): float(m.group(2)) for m in re.finditer(
-            r'\|\|NVMetric\|\| (\S+): (\S+)', stdout)}
         if clocks:
             self.LastMetrics['sm_clock_mhz'] = float(np.median(clocks))
         # Utilisation metrics are only comparable when profiled at a steady
@@ -1699,17 +1702,16 @@ class BaseBenchmark(ABC):
             for k, v in kernelDescr.items():
                 kernel = Kernel(self.Device, k, k, self.resultsDir, recorded=False)
                 print('Not Recordkernel', kernel)
-                if isinstance(self.Device, Device.NVIDIA):
-                    kernel.setOrigDescr( v['Registers Per Thread'],
-                                         v['Static SMem'],
-                                         v['Grid X'],
-                                         v['Block X'],
-                                         v['Duration'],
-                                         GLoads=v.get('GLoads'),
-                                         GStores=v.get('GStores'),
-                                         Occupancy=v.get('Occupancy'),
-                                         BranchEfficiency=v.get(
-                                             'Branch Efficiency'))
+                kernel.setOrigDescr( v['Registers Per Thread'],
+                                     v['Static SMem'],
+                                     v['Grid X'],
+                                     v['Block X'],
+                                     v['Duration'],
+                                     GLoads=v.get('GLoads'),
+                                     GStores=v.get('GStores'),
+                                     Occupancy=v.get('Occupancy'),
+                                     BranchEfficiency=v.get(
+                                         'Branch Efficiency'))
                 kernels[f'{k}.json'] = kernel
             return application_time, kernels
 
@@ -1735,18 +1737,16 @@ class BaseBenchmark(ABC):
             if Path(f'{kname_to_hash[k]}.json').exists():
                 kernel = Kernel(self.Device, k, kname_to_hash[k], self.resultsDir)
                 print('Recordkernel', kernel)
-                #FIXME: We should also support AMD in this point
-                if isinstance(self.Device, Device.NVIDIA):
-                    kernel.setOrigDescr( v['Registers Per Thread'],
-                                         v['Static SMem'],
-                                         v['Grid X'],
-                                         v['Block X'],
-                                         v['Duration'],
-                                         GLoads=v.get('GLoads'),
-                                         GStores=v.get('GStores'),
-                                         Occupancy=v.get('Occupancy'),
-                                         BranchEfficiency=v.get(
-                                             'Branch Efficiency'))
+                kernel.setOrigDescr( v['Registers Per Thread'],
+                                     v['Static SMem'],
+                                     v['Grid X'],
+                                     v['Block X'],
+                                     v['Duration'],
+                                     GLoads=v.get('GLoads'),
+                                     GStores=v.get('GStores'),
+                                     Occupancy=v.get('Occupancy'),
+                                     BranchEfficiency=v.get(
+                                         'Branch Efficiency'))
                 kernels[f'{kname_to_hash[k]}.json'] = kernel
             else:
                 raise RuntimeError(f'Kernel {k} was profiled but not recorded')
