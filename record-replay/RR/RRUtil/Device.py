@@ -304,6 +304,12 @@ class NVIDIA(metaclass=DeviceSingleton):
                 ret[s[0]][4] = s[2]
         return ret
 
+    def recordPrefix(self):
+        return ''
+
+    def getRecordMem(self):
+        return 4
+
     def command(self):
         return self._profile
 
@@ -400,7 +406,9 @@ class AMDGPU(metaclass=DeviceSingleton):
             }
 
     def getMaxMem(self):
-        return 65
+        # MI50 has 16 GB. Asking for more makes the replay region step down
+        # through failed allocations. TODO: query the device.
+        return 15
 
     def isValidConfig(self, NumThreads, NumTeams):
         return NumThreads * NumTeams <= self.ThreadsSMP
@@ -564,6 +572,17 @@ class AMDGPU(metaclass=DeviceSingleton):
         #execute_command(compile_cmd, capture_output=True, check=True, shell=True)
 
         return None
+
+    def recordPrefix(self):
+        # The replay region has no fixed-address mapping on AMDGPU, so it lands
+        # at an ASLR-dependent address. Record without ASLR; the replay tool
+        # disables it for itself.
+        return 'setarch $(uname -m) -R '
+
+    def getRecordMem(self):
+        # The heuristic region loses up to 2 GB to alignment and keeps 1 GB of
+        # headroom (LIBOMPTARGET_RR_DEVMEM_HEADROOM_MB), so allocate more.
+        return 12
 
     def command(self):
         return self._profile

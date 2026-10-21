@@ -1695,6 +1695,12 @@ int target_replay(ident_t *Loc, DeviceTy &Device, void *HostPtr,
     if (!ReplayTgtPtr || ReplayTgtSize < DeviceMemorySize) {
       ReplayTgtPtr = Device.allocData(DeviceMemorySize, /* HstPtr */ nullptr,
                                       TARGET_ALLOC_DEFAULT);
+      // Recorded pointers are only valid at the recorded address; without the
+      // region every later copy and the launch would fault.
+      if (!ReplayTgtPtr)
+        FATAL_MESSAGE(DeviceId, "%s",
+                      "cannot allocate the replay region at the recorded "
+                      "device address");
       ReplayTgtSize = DeviceMemorySize;
       ReplayBackupPtr = nullptr;
       Device.submitData(ReplayTgtPtr, DeviceMemory, DeviceMemorySize, AsyncInfo);

@@ -1576,7 +1576,7 @@ class BaseBenchmark(ABC):
         self.root = root
         self.versions = dict()
         self.Device = Device
-        self.recorder = self.OMPRecorder(4)
+        self.recorder = self.OMPRecorder(Device.getRecordMem())
 
         self.resultsDir = kwargs.get('resultsDir')
 
@@ -1669,7 +1669,7 @@ class BaseBenchmark(ABC):
         command = self.command()
         if Record:
             #TODO: replace command()
-            command = self.recorder.command().format(executable=command)
+            command = self.Device.recordPrefix() + self.recorder.command().format(executable=command)
             env += ' '  + self.recorder.env()
         else:
             env += ' ' + self.recorder.threads()

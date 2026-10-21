@@ -64,6 +64,10 @@ private:
   UInt32Envar OMPX_DeviceMemorySize;
   // The starting address for the for the device allocations;
   Int64Envar OMPX_DeviceMemoryStart;
+  // Unused space (MB) left at the top of a heuristic recording region. Without
+  // a fixed-address mapping the replay block can end lower than the recording
+  // block did; the headroom keeps the recorded region inside it.
+  UInt32Envar OMPX_DeviceMemoryHeadroom;
 
   Error initMMapReplayMemory(size_t MaxMemoryAllocation){
     void *VAddr = reinterpret_cast<void *>(OMPX_DeviceMemoryStart.get());
@@ -140,7 +144,10 @@ private:
       // Align the memory at two times the step size to avoid mismatch in the
       // beginning of the memory region.
       AlignedMemoryStart = alignPtr(MemoryStart, (2 * STEP));
-      Size -= ((uintptr_t) MemoryStart - (uintptr_t) AlignedMemoryStart);
+      Size -= ((uintptr_t) AlignedMemoryStart - (uintptr_t) MemoryStart);
+      const size_t Headroom = OMPX_DeviceMemoryHeadroom * 1024 * 1024ULL;
+      if (OMPX_RecordKernel && Size > Headroom)
+        Size -= Headroom;
     }
 
     if (!MemoryStart && !AlignedMemoryStart)
@@ -296,7 +303,9 @@ public:
         OMPX_ReplaySaveOutput("LIBOMPTARGET_RR_SAVE_OUTPUT"),
         OMPX_DeviceMemorySize("LIBOMPTARGET_RR_DEVMEM_SIZE",
                               /* Default in GB */ 64),
-        OMPX_DeviceMemoryStart("LIBOMPTARGET_DEVMEM_START", -1) {};
+        OMPX_DeviceMemoryStart("LIBOMPTARGET_DEVMEM_START", -1),
+        OMPX_DeviceMemoryHeadroom("LIBOMPTARGET_RR_DEVMEM_HEADROOM_MB",
+                                  /* Default in MB */ 1024) {};
 
   void saveImage(const char *Name, const DeviceImageTy &Image) {
     std::string ImageName = getHashedKernelName(Name) + ".image";
@@ -397,6 +406,12 @@ public:
     // Assumes alignment is a power of 2.
     int64_t AlignedSize = Size + (ALIGN - 1) & (~(ALIGN - 1));
     std::lock_guard<std::mutex> LG(AllocationLock);
+    if (MemorySize + AlignedSize > TotalSize) {
+      REPORT("Record/replay region exhausted: %" PRIu64 " of %" PRIu64
+             " bytes used, %" PRIu64 " requested\n",
+             MemorySize, TotalSize, Size);
+      return nullptr;
+    }
     Alloc = MemoryPtr;
     MemoryPtr = advanceVoidPtr(MemoryPtr, AlignedSize);
     MemorySize += AlignedSize;
@@ -889,8 +904,14 @@ Expected<void *> GenericDeviceTy::dataAlloc(int64_t Size, void *HostPtr,
                                             TargetAllocTy Kind) {
   void *Alloc = nullptr;
 
-  if (RecordReplay.isRecordingOrReplaying())
-    return RecordReplay.alloc(Size);
+  if (RecordReplay.isRecordingOrReplaying()) {
+    Alloc = RecordReplay.alloc(Size);
+    if (!Alloc)
+      return Plugin::error("Record/replay region cannot hold %" PRId64
+                           " more bytes",
+                           Size);
+    return Alloc;
+  }
 
   switch (Kind) {
   case TARGET_ALLOC_DEFAULT:

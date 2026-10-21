@@ -19,6 +19,8 @@
 #include "llvm/Support/TimeProfiler.h"
 
 #include <cstdlib>
+#include <sys/personality.h>
+#include <unistd.h>
 
 using namespace llvm;
 using namespace llvm::omp::target;
@@ -105,7 +107,25 @@ void registerGlobalEntries(const void *BufferPtr, const void *BufferEndPtr,
   }
 }
 
+// Devices without a fixed-address mapping (AMDGPU) place the replay region
+// at an ASLR-dependent address. Re-execute once with ASLR disabled so that it
+// lands where the recording (also run without ASLR) placed it.
+// LIBOMPTARGET_RR_KEEP_ASLR=1 opts out.
+static void disableASLR(char **argv) {
+  const char *Keep = getenv("LIBOMPTARGET_RR_KEEP_ASLR");
+  if (Keep && std::string(Keep) != "0")
+    return;
+  int Persona = personality(0xffffffff);
+  if (Persona == -1 || (Persona & ADDR_NO_RANDOMIZE))
+    return;
+  if (personality(Persona | ADDR_NO_RANDOMIZE) == -1)
+    return;
+  execv("/proc/self/exe", argv);
+  // Fall through with ASLR on if the re-exec failed.
+}
+
 int main(int argc, char **argv) {
+  disableASLR(argv);
   TimeTraceScope TimeScope("Replay");
 
   cl::HideUnrelatedOptions(ReplayOptions);
