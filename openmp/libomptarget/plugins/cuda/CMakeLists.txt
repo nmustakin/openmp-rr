@@ -26,9 +26,18 @@ libomptarget_say("Building CUDA offloading plugin.")
 # Define the suffix for the runtime messaging dumps.
 add_definitions(-DTARGET_NAME=CUDA)
 
+# The record-replay measurement code needs nvmetrics. Skip the plugin when it
+# is missing, e.g. when building for AMD GPUs only.
+set(NVMETRICS_ROOT "/data2/nmn/nvmetrics" CACHE PATH "nvmetrics source/build root")
+find_path(NVMETRICS_INCLUDE_DIR nv_metrics.h PATHS ${NVMETRICS_ROOT}/lib NO_DEFAULT_PATH)
+if (NOT NVMETRICS_INCLUDE_DIR)
+  libomptarget_say("Not building CUDA offloading plugin: nvmetrics not found (set NVMETRICS_ROOT)")
+  return()
+endif()
+
 # Include NV Metrics API directories
-include_directories(/data2/nmn/nvmetrics/lib)
-link_directories(/data2/nmn/nvmetrics/build/lib)
+include_directories(${NVMETRICS_INCLUDE_DIR})
+link_directories(${NVMETRICS_ROOT}/build/lib)
 
 set(LIBOMPTARGET_DLOPEN_LIBCUDA OFF)
 option(LIBOMPTARGET_FORCE_DLOPEN_LIBCUDA "Build with dlopened libcuda" ${LIBOMPTARGET_DLOPEN_LIBCUDA})

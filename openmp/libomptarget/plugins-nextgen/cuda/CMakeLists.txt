@@ -30,11 +30,22 @@ add_definitions("-DTARGET_NAME=CUDA")
 # requires changing the original plugins.
 add_definitions(-DDEBUG_PREFIX="TARGET CUDA RTL")
 
+# The record-replay measurement code needs nvmetrics and CUPTI. Skip the plugin
+# when they are missing, e.g. when building for AMD GPUs only.
+set(NVMETRICS_ROOT "/data2/nmn/nvmetrics" CACHE PATH "nvmetrics source/build root")
+set(CUPTI_ROOT "/usr/local/cuda" CACHE PATH "CUDA toolkit root providing CUPTI")
+find_path(NVMETRICS_INCLUDE_DIR nv_metrics.h PATHS ${NVMETRICS_ROOT}/lib NO_DEFAULT_PATH)
+find_path(CUPTI_INCLUDE_DIR cupti.h PATHS ${CUPTI_ROOT}/include ${CUPTI_ROOT}/extras/CUPTI/include)
+if (NOT NVMETRICS_INCLUDE_DIR OR NOT CUPTI_INCLUDE_DIR)
+  libomptarget_say("Not building CUDA NextGen offloading plugin: nvmetrics or CUPTI not found (set NVMETRICS_ROOT, CUPTI_ROOT)")
+  return()
+endif()
+
 # Include NV Metrics API directories
-include_directories(/data2/nmn/nvmetrics/lib)
-include_directories(/usr/local/cuda/include/) 
-link_directories(/data2/nmn/nvmetrics/build/lib)
-link_directories(/usr/local/cuda/lib64)
+include_directories(${NVMETRICS_INCLUDE_DIR})
+include_directories(${CUPTI_INCLUDE_DIR})
+link_directories(${NVMETRICS_ROOT}/build/lib)
+link_directories(${CUPTI_ROOT}/lib64)
 
 set(LIBOMPTARGET_DLOPEN_LIBCUDA OFF)
 option(LIBOMPTARGET_FORCE_DLOPEN_LIBCUDA "Build with dlopened libcuda" ${LIBOMPTARGET_DLOPEN_LIBCUDA})

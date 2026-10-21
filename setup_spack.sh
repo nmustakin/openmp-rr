@@ -56,6 +56,8 @@ if [[ "$system" == "nvidia" ]]; then
 elif [[ "$system" == "amd" ]]; then
   export TARGETS="AMDGPU"
   RRMACRO="-DLIBOMPTARGET_JIT_AMDGPU"
+  # The AMDGPU plugin JIT-links IR images with lld.
+  PACKAGES="clang;lld"
 else
   echo "system (first command line argument) can either be 'nvidia' or 'amd'"
   exit
@@ -75,7 +77,7 @@ cmake \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DLLVM_TARGETS_TO_BUILD='Native' \
   -DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=${TARGETS} \
-  -DLLVM_ENABLE_PROJECTS='clang' \
+  -DLLVM_ENABLE_PROJECTS="${PACKAGES}" \
   -DLLVM_ENABLE_RUNTIMES='openmp' \
   -DCMAKE_INSTALL_PREFIX=${INSTALL_DIR} \
   -DLLVM_OPTIMIZED_TABLEGEN=off \
