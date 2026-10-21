@@ -2110,9 +2110,13 @@ struct AMDGPUDeviceTy : public GenericDeviceTy, AMDGenericDeviceTy {
   Error dataExchangeImpl(const void *SrcPtr, GenericDeviceTy &DstGenericDevice,
                          void *DstPtr, int64_t Size,
                          AsyncInfoWrapperTy &AsyncInfoWrapper) override {
-    // This function should never be called because the function
-    // AMDGPUPluginTy::isDataExchangable() returns false.
-    return Plugin::error("dataExchangeImpl not supported");
+    // Only copies within one device are supported (see
+    // AMDGPUPluginTy::isDataExchangable()), e.g. record-replay restoring the
+    // replay inputs from a device copy (LIBOMPTARGET_RR_DEVICE_RESTORE).
+    if (&DstGenericDevice != this)
+      return Plugin::error("dataExchangeImpl between devices not supported");
+    AMDGPUStreamTy &Stream = getStream(AsyncInfoWrapper);
+    return Stream.pushPinnedMemoryCopyAsync(DstPtr, SrcPtr, Size);
   }
 
   /// Initialize the async info for interoperability purposes.
@@ -2544,7 +2548,7 @@ struct AMDGPUPluginTy final : public GenericPluginTy {
 
   /// This plugin does not support exchanging data between two devices.
   bool isDataExchangable(int32_t SrcDeviceId, int32_t DstDeviceId) override {
-    return false;
+    return SrcDeviceId == DstDeviceId;
   }
 
   /// Get the host device instance.

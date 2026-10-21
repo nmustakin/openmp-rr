@@ -84,6 +84,10 @@ bool verifyMem(std::string &KernelHashName, const std::string Suffix) {
   StringRef OriginalOutput = OriginalOutputMB.get()->getBuffer();
   StringRef ReplayOutput = ReplayOutputMB.get()->getBuffer();
 
+  // The replay may allocate past the recorded region (e.g. the input backup
+  // of LIBOMPTARGET_RR_DEVICE_RESTORE); only the recorded part must match.
+  if (ReplayOutput.size() > OriginalOutput.size())
+    ReplayOutput = ReplayOutput.take_front(OriginalOutput.size());
   return (OriginalOutput == ReplayOutput);
 }
 
