@@ -690,7 +690,7 @@ class Kernel:
             # samples are timing-only (they only refine the baseline duration).
             if (self.ClassifyAdaptive and len(samples) == 1
                     and classify_bottleneck(samples[0]) != 'unknown'
-                    and classification_margin(samples[0], self.SaturatedSMPct or 80.0)
+                    and classification_margin(samples[0], self.SaturatedSMPct or None)
                     >= self.ClassifyMargin):
                 for _ in range(self.ClassifySamples - 1):
                     BValid, _, _, BDuration, BEnergy, _, _ = self.sample(Tries=1, Screen=True)
@@ -708,7 +708,7 @@ class Kernel:
             db.Update()
             names = set().union(*[m.keys() for m in samples])
             median = {n: float(np.median([m[n] for m in samples if n in m])) for n in names}
-            klass = classify_bottleneck(median, self.SaturatedSMPct or 80.0)
+            klass = classify_bottleneck(median, self.SaturatedSMPct or None)
 
         strategy, target, fidelity = algorithm, 'objective', 'full'
         pool = options.pop('pool', None)
@@ -1257,6 +1257,10 @@ class Kernel:
             metrics=not screen, energy=not screen)
         if len(res) == 0:
             return False, None, None, None, None, None, None
+        # The profiled binary's compile-time spills (registers spilled to
+        # scratch/local memory), known before any measurement.
+        if SStats and getattr(self, 'LastMetrics', None) and len(SStats) > 4:
+            self.LastMetrics['compile_spill_bytes'] = float(SStats[3] + SStats[4])
 
         DStats += res
         #stats = np.array(DStats)[:,-3]

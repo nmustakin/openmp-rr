@@ -207,6 +207,80 @@ writes the `kernel_activities.csv` the tuner reads. Validation:
   - the input sizes chosen for the T4 (0.1–100 ms kernels), which need
     re-checking on MI50.
 
+### Classification thresholds for MI50 (2026-10-21)
+
+**Method.** For all 24 LULESH and miniFE kernels (the tuner's own
+recordings), `~/rr-amd-work/calib/landscape.py` measured:
+- three full warm baselines with rocprof metrics;
+- an exhaustive batch landscape: every binary class × threads (multiples
+  of 64) × 9 teams fractions, about 100–900 configurations per kernel, on 8
+  GPUs in about 13 minutes;
+- a full measurement of the best configuration.
+
+`calib/analyze.py` labels each kernel by what that configuration changed:
+- *none*: ≤ 1.05×;
+- *register*: spills removed or a different binary;
+- *locality*: ≥ 25% fewer DRAM reads with the same binary;
+- *other*: runtime parameters only.
+
+| App | Kernel | Validated best | Default → best binary (VGPRs, spill) | DRAM % | Occ % | VALU % |
+|---|---|---|---|---|---|---|
+| LULESH | l333 | 1.57× | (29, 0) → (24, 0) | 19 | 19 | 2.6 |
+| LULESH | l584 | 3.03× | (64, 696) → (121, 0) | 32 | 37 | 3.2 |
+| LULESH | l649 | 1.82× | (30, 0) → (30, 0) | 57 | 38 | 1.6 |
+| LULESH | l844 | 4.32× | (64, 1824) → (203, 0) | 60 | 38 | 3.2 |
+| LULESH | l1029 | 1.78× | (30, 0) → (24, 4) | 61 | 39 | 1.7 |
+| LULESH | l1080 | 4.51× | (64, 1056) → (200, 0) | 25 | 38 | 0.9 |
+| LULESH | l1201 | 1.34× | (43, 0) → (32, 16) | 5 | 6 | 4.8 |
+| LULESH | l1235 | 1.51× | (26, 0) → (24, 0) | 18 | 31 | 6.6 |
+| LULESH | l1279 | 1.07× | (31, 0) → (31, 0) | 22 | 36 | 6.4 |
+| LULESH | l1312 | 1.08× | (26, 0) → (24, 0) | 5 | 4 | 0.8 |
+| LULESH | l1340 | 1.02× | (26, 0) → (26, 0) | 25 | 38 | 4.7 |
+| LULESH | l1377 | 1.01× | (26, 0) → (24, 0) | 27 | 38 | 4.4 |
+| LULESH | l1721 | 4.63× | (64, 1088) → (128, 56) | 53 | 36 | 7.1 |
+| LULESH | l1841 | 1.20× | (36, 0) → (35, 0) | 31 | 18 | 4.2 |
+| LULESH | l1913 | 3.43× | (64, 472) → (178, 0) | 50 | 35 | 8.2 |
+| LULESH | l2103 | 1.12× | (52, 0) → (46, 0) | 27 | 38 | 15.3 |
+| LULESH | l2372 | 1.08× | (64, 8) → (64, 8) | 28 | 25 | 16.2 |
+| miniFE | l157 | 1.25× | (24, 0) → (24, 0) | 27 | 37 | 14.4 |
+| miniFE | l169 | 1.11× | (29, 0) → (29, 0) | 31 | 23 | 7.4 |
+| miniFE | l205 | 1.06× | (26, 0) → (26, 0) | 25 | 36 | 9.1 |
+| miniFE | l210 | 1.15× | (26, 0) → (26, 0) | 24 | 35 | 8.9 |
+| miniFE | l254 | 1.18× | (43, 0) → (43, 0) | 12 | 12 | 9.7 |
+| miniFE | l290 | 1.19× | (43, 0) → (43, 0) | 7 | 12 | 9.6 |
+| miniFE | l521 | 1.10× | (60, 0) → (60, 0) | 57 | 38 | 6.2 |
+
+**Findings.**
+- The MI50 gains far more than the T4. LULESH l1721, l1080, l844, l1913 and
+  l584 gain 3.0–4.6×. l584, l1721 and l1913 were compute-saturated, with
+  nothing to gain, on the T4.
+- All five spill at the default bounds. A 1024-thread work-group caps them
+  at 64 VGPRs. MaxThreads ≤ 512 gives 121–203 VGPRs and no spills.
+- Their DRAM reads also fall 80–88%, because the spill traffic disappears.
+  The locality label therefore has to come after the spill test.
+- No kernel is compute-saturated: VALU busy is at most 16%. Half-rate FP64
+  makes these kernels memory- and latency-bound.
+- The two kernels with nothing to gain (l1340, l1377) cannot be separated
+  from 1.06–1.25× kernels by baseline metrics.
+
+**Thresholds** (`Search.CLASS_THRESHOLDS['amd']`):
+- Spill test first, using `compile_spill_bytes`: the profiled binary's
+  compile-time spills, now added to every sample's metrics. `scratch_bytes`
+  also counts stack, such as the 16 KB per lane of OpenMP reductions.
+- Locality: DRAM throughput > 45%, with no occupancy condition.
+- Register otherwise: occupancy < 20%.
+- The compute rule is unchanged and does not fire.
+
+**Agreement with the labels:** 17 of 24, against 11 for the T4 rules, which
+classify every MI50 kernel as register. The disagreements:
+- the two no-gain kernels, classified *other* (normal TPE search);
+- the reductions l254 and l290, classified *register* (as on the T4);
+- l2372, which has 8 bytes of spill;
+- l1235 and l2103, small register-labeled gains classified *other*.
+
+The thresholds were fit and evaluated on the same 24 kernels from two
+applications, so HeCBench is the out-of-sample check.
+
 ### Remaining
 
 1. **Phase 5 measurement validation** (paper §4, Table `tab:measurement`):

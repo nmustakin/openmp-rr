@@ -122,9 +122,32 @@ METRIC_ROLES = {
         'sm_util': 'valu_busy_pct',
         'dram_util': 'dram_throughput_pct',
         'occupancy': 'achieved_occupancy_pct',
-        'spill': 'scratch_bytes',
+        # Compile-time VGPR spills of the profiled binary. scratch_bytes also
+        # counts stack, e.g. the 16 KB per lane of OpenMP reductions.
+        'spill': 'compile_spill_bytes',
     },
 }
+
+
+# Thresholds of classify_bottleneck (percentages of the role metrics).
+# nvidia: derived from the ten LULESH kernels on the T4.
+CLASS_THRESHOLDS = {
+    'nvidia': dict(sm_saturated=80.0, compute_dram_max=70.0, locality_occ=80.0,
+                   locality_dram=70.0, register_occ=60.0),
+}
+# amd: calibrated on 24 MI50 kernels (17 LULESH, 7 miniFE) from exhaustive
+# batch landscapes; see AMD_PORT_PLAN.md. Spills of the default binary (64 VGPRs
+# at the default 1024-thread bound) predicted the largest gains (3-4.6x), so
+# they are tested before locality; locality kernels were the spill-free ones
+# above 45% DRAM throughput, and baseline occupancy (~37% almost everywhere)
+# does not separate them. No MI50 kernel was compute-saturated (VALU busy <=
+# 16%), so the compute rule keeps the T4 values and does not fire.
+CLASS_THRESHOLDS['amd'] = dict(sm_saturated=80.0, compute_dram_max=70.0, locality_occ=0.0,
+                               locality_dram=45.0, register_occ=20.0, spill_first=True)
+
+
+def thresholds():
+    return CLASS_THRESHOLDS[LIMITS.vendor]
 
 
 def metric(metrics, role, default=None):
@@ -233,7 +256,7 @@ def build_compile_table(kernel, path):
     return table
 
 
-def classify_bottleneck(metrics, sm_saturated=80.0):
+def classify_bottleneck(metrics, sm_saturated=None):
     """Bottleneck class of a kernel from its baseline metrics.
 
     `metrics` should be the per-metric median of several baseline samples.
@@ -241,6 +264,8 @@ def classify_bottleneck(metrics, sm_saturated=80.0):
     compute-saturated kernels had nothing to gain; locality-bound kernels gain
     by cutting DRAM traffic; register-bound kernels gain from launch bounds.
     """
+    th = thresholds()
+    sm_saturated = sm_saturated or th['sm_saturated']
     sm = metric(metrics, 'sm_util')
     dram = metric(metrics, 'dram_util')
     occ = metric(metrics, 'occupancy')
@@ -251,24 +276,30 @@ def classify_bottleneck(metrics, sm_saturated=80.0):
     # memory-heavy kernel profiled while power-capped (lower SM clock) can
     # show high SM utilisation too (l844 read 52-88%; its DRAM was 69-88%,
     # while the compute-saturated kernels stayed <= 66%).
-    if sm > sm_saturated and dram < 70:
+    if sm > sm_saturated and dram < th['compute_dram_max']:
         return 'compute'
-    if occ > 80 and dram > 70:
+    if th.get('spill_first') and spill > 0:
+        return 'register'
+    if occ > th['locality_occ'] and dram > th['locality_dram']:
         return 'locality'
-    if spill > 0 or occ < 60:
+    if spill > 0 or occ < th['register_occ']:
         return 'register'
     return 'other'
 
 
-def classification_margin(metrics, sm_saturated=80.0):
+def classification_margin(metrics, sm_saturated=None):
     """Smallest distance (percentage points) of the metrics used by
     classify_bottleneck to its thresholds; -1 if a metric is missing."""
+    th = thresholds()
+    sm_saturated = sm_saturated or th['sm_saturated']
     sm = metric(metrics, 'sm_util')
     dram = metric(metrics, 'dram_util')
     occ = metric(metrics, 'occupancy')
     if sm is None or dram is None or occ is None:
         return -1.0
-    return float(min(abs(sm - sm_saturated), abs(dram - 70), abs(occ - 80), abs(occ - 60)))
+    return float(min(abs(sm - sm_saturated), abs(dram - th['compute_dram_max']),
+                     abs(dram - th['locality_dram']), abs(occ - th['locality_occ']),
+                     abs(occ - th['register_occ'])))
 
 
 def _z(values):
