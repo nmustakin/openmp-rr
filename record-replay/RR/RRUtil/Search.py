@@ -97,7 +97,47 @@ SM_COUNT, SM_THREADS, SM_BLOCKS, SM_REGS, REG_UNIT, WARP = 40, 1024, 16, 65536, 
 MAX_REGS_PER_BLOCK = 65536
 
 
+class DeviceLimits:
+    """Limits the search features and the fractional point mapping use.
+    Defaults are the T4; set_device() takes them from the tuner's device."""
+    vendor = 'nvidia'
+    sm_count, sm_threads, warp, max_block = SM_COUNT, SM_THREADS, WARP, 1024
+    # Upper bound of MinTeams (blocks per SM / work-groups per CU).
+    max_blocks = 32
+
+
+LIMITS = DeviceLimits()
+
+
+def set_device(prof):
+    """Use the limits of a Device.NVIDIA or Device.AMDGPU."""
+    global LIMITS
+    limits = DeviceLimits()
+    if getattr(prof, 'Target', '').startswith('amdgcn'):
+        limits.vendor = 'amd'
+        limits.sm_count = int(prof.CUs)
+        limits.waves_per_cu = int(prof.MaxWavesPerCU)
+    limits.sm_threads = int(prof.ThreadsSMP)
+    limits.warp = int(prof.WarpSize)
+    limits.max_block = int(prof.MaxThreadBlockSize)
+    LIMITS = limits
+
+
+def _amd_blocks_per_cu(vgprs, block):
+    """gfx9 work-groups per CU from VGPR use: VGPRs are allocated in blocks
+    of 4 out of 256 per lane and SIMD, at most waves_per_cu / 4 waves per SIMD,
+    and a work-group's waves are spread over the CU's 4 SIMDs. Assumes at most
+    16 multi-wave work-groups per CU."""
+    waves = int(math.ceil(block / LIMITS.warp))
+    simd_waves = LIMITS.waves_per_cu // 4
+    per_simd = min(simd_waves, 256 // int(math.ceil(max(vgprs, 1) / 4) * 4))
+    cap = LIMITS.waves_per_cu if waves == 1 else 16
+    return max(0, min((per_simd * 4) // waves, LIMITS.waves_per_cu // waves, cap))
+
+
 def theoretical_blocks_per_sm(regs, block):
+    if LIMITS.vendor == 'amd':
+        return _amd_blocks_per_cu(regs, block)
     warps = int(math.ceil(block / WARP))
     regs_per_warp = int(math.ceil(max(regs, 1) * WARP / REG_UNIT) * REG_UNIT)
     return max(0, min(SM_THREADS // (warps * WARP), (SM_REGS // regs_per_warp) // warps,
@@ -110,17 +150,20 @@ def compile_features(config, table, trip_count):
     `table` maps (MaxThreads, MinTeams) -> (regs, spill_bytes) from ptxas.
     Returns (features, known_invalid).
     """
-    mt, mn = config.get('MaxThreads') or 1024, config.get('MinTeams') or 1
+    mt, mn = config.get('MaxThreads') or LIMITS.max_block, config.get('MinTeams') or 1
     nt = config.get('NumThreads') or mt
     teams = config.get('NumTeams') or max(1, math.ceil(trip_count / nt))
     regs, spill = table.get((mt, mn), (float('nan'), float('nan')))
     if regs != regs:
         return None, False
     blocks = theoretical_blocks_per_sm(regs, nt)
-    occupancy = blocks * math.ceil(nt / WARP) * WARP / SM_THREADS
-    waves = teams / max(1, SM_COUNT * blocks)
+    occupancy = blocks * math.ceil(nt / LIMITS.warp) * LIMITS.warp / LIMITS.sm_threads
+    waves = teams / max(1, LIMITS.sm_count * blocks)
     tail = waves / math.ceil(waves) if waves > 0 else 0.0
-    known_invalid = regs * nt > MAX_REGS_PER_BLOCK
+    if LIMITS.vendor == 'amd':
+        known_invalid = blocks == 0      # not even one work-group fits a CU
+    else:
+        known_invalid = regs * nt > MAX_REGS_PER_BLOCK
     features = [math.log2(mt), mn, math.log2(nt), math.log2(teams), regs, spill,
                 occupancy, math.log2(max(waves, 1e-3)), tail]
     return features, known_invalid
@@ -144,7 +187,7 @@ def build_compile_table(kernel, path):
     pairs = set()
     for w in range(1, warps + 1):
         mt = int(w * prof.WarpSize)
-        max_blocks = min(32, int(prof.ThreadsSMP // mt))
+        max_blocks = min(LIMITS.max_blocks, int(prof.ThreadsSMP // mt))
         for mn in range(1, max(1, max_blocks) + 1):
             pairs.add((mt, mn))
     cwd = os.getcwd()
@@ -299,7 +342,7 @@ class TreesSearcher:
         return 0.5 * _z(y) + 0.5 * condition
 
 
-def config_to_point(config, trip_count, warp=32, max_block=1024, threads_smp=1024):
+def config_to_point(config, trip_count, warp=None, max_block=None, threads_smp=None):
     """Inverse of Device.getLaunchBounds: fractional point for a discrete config.
 
     `config` holds MaxThreads, MinTeams, NumThreads and either NumTeams or
@@ -307,8 +350,10 @@ def config_to_point(config, trip_count, warp=32, max_block=1024, threads_smp=102
     in getLaunchBounds on the intended value.
     """
     eps = 1e-9
+    max_block = max_block or LIMITS.max_block
+    threads_smp = threads_smp or LIMITS.sm_threads
     mt = int(config['MaxThreads'])
-    max_blocks = min(32, int(threads_smp // mt))
+    max_blocks = min(LIMITS.max_blocks, int(threads_smp // mt))
     mn = min(int(config['MinTeams']), max_blocks)
     nt = min(int(config['NumThreads']), mt)
     frac = config.get('teams_frac')
@@ -352,10 +397,13 @@ def build_portfolio(pool, target_kid, klass, trip_count, size=10, per_kernel=3):
     return points
 
 
-def point_to_config(point, trip_count, warp=32, max_block=1024, threads_smp=1024):
-    """Device.getLaunchBounds for the T4 limits (MaxThreads, MinTeams, NumThreads, NumTeams)."""
+def point_to_config(point, trip_count, warp=None, max_block=None, threads_smp=None):
+    """Device.getLaunchBounds for the device limits (MaxThreads, MinTeams, NumThreads, NumTeams)."""
+    warp = warp or LIMITS.warp
+    max_block = max_block or LIMITS.max_block
+    threads_smp = threads_smp or LIMITS.sm_threads
     mt = int(math.ceil(max(point['MaxThreads'], 1e-12) * (max_block / warp)) * warp)
-    max_blocks = min(32, int(threads_smp // mt))
+    max_blocks = min(LIMITS.max_blocks, int(threads_smp // mt))
     mn = max(1, int(math.ceil(max(point['MinTeams'], 1e-12) * max_blocks)))
     nt = min(mt, int(math.ceil(max(point['NumThreads'], 1e-12) * mt / warp) * warp))
     teams = int(math.ceil(trip_count / nt * max(point['NumTeams'], 1e-12)))
@@ -421,7 +469,7 @@ class TransferModelSearcher:
         rows = []
         fracs = np.geomspace(1 / 256, 1.0, n_frac)
         for (regs, spill), (mt, mn) in classes.items():
-            for nt in range(32, mt + 1, 32):
+            for nt in range(LIMITS.warp, mt + 1, LIMITS.warp):
                 for fr in fracs:
                     teams = max(1, int(math.ceil(trip_count * fr / nt)))
                     cfg = dict(MaxThreads=mt, MinTeams=mn, NumThreads=nt, NumTeams=teams)
@@ -750,7 +798,7 @@ class RankTransferSearcher(TransferModelSearcher):
             return []
         bins = sorted(set(zip(self.cand.regs, self.cand.spill)))
         b = np.array([bins.index(x) for x in zip(self.cand.regs, self.cand.spill)], float)
-        pts = np.c_[b, self.cand.NumThreads.values / 32.0,
+        pts = np.c_[b, self.cand.NumThreads.values / float(LIMITS.warp),
                     np.log2(self.cand.teams_frac.values) / (8.0 / 27)]
         top = [self.own_idx[i] for i in np.argsort(-np.array(self.own_y))[:3]]
         d = np.full(len(pts), np.inf)

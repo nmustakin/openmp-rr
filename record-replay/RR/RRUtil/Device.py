@@ -472,12 +472,12 @@ class AMDGPU(metaclass=DeviceSingleton):
         return NumThreads * NumTeams <= self.ThreadsSMP
 
     def getWavesPerEU(self, MaxThreads, MinTeams):
-      if MaxThreads is not None:
-        MinWarpsPerCU = int((MinTeams * MaxThreads ) / self.WarpSize)
-      else:
-        MinWarpsPerCU = int((MinTeams * self.MaxThreadBlockSize) / self.WarpSize)
-      MinWarpsPerEU = int(MinWarpsPerCU / 4)
-      return MinWarpsPerEU
+        """amdgpu-waves-per-eu for at least MinTeams work-groups of MaxThreads
+        per CU (the analogue of minBlocksPerMultiprocessor). A CU has 4 SIMDs
+        (EUs); the value must be in [1, waves per SIMD]."""
+        threads = MaxThreads if MaxThreads is not None else self.MaxThreadBlockSize
+        waves_per_cu = MinTeams * math.ceil(threads / self.WarpSize)
+        return int(min(max(1, math.ceil(waves_per_cu / 4)), self.MaxWavesPerCU // 4))
 
     def transformConfig(self, options):
       config = {}
@@ -502,7 +502,8 @@ class AMDGPU(metaclass=DeviceSingleton):
         MaxThreadFrac = options.get('MaxThreads', 1.0)
         MaxThreadsPerBlock = int(math.ceil(MaxThreadFrac * MaxNumberOfWarps) * WarpSize)
 
-        MaxBlocks = int(math.floor(MaxThreadsPerMP / MaxThreadsPerBlock))
+        # Same MinTeams range as the search's point mapping (Search.LIMITS).
+        MaxBlocks = min(32, int(math.floor(MaxThreadsPerMP / MaxThreadsPerBlock)))
 
         MinFracTeam = options.get('MinTeams', None)
         if MinFracTeam is None:
@@ -652,53 +653,65 @@ class AMDGPU(metaclass=DeviceSingleton):
         execute_command(opt_cmd, capture_output=True, shell=True)
 
     def deviceCompile(self, original, Name, HashName, **kwargs):
-        #assert all([k in self.compilationConfigs for k in kwargs.keys()]), f'kwargs keys {kwargs.keys()} must be <= {self.compilationConfigs}'
+        """Apply the launch bounds and return the backend's resource usage.
 
-        flatWorkGroupSize = '{0},{0}'
+        The image stays LLVM bitcode, which the AMDGPU plugin JIT-compiles.
+        Resource usage comes from compiling the same bitcode with llc, in the
+        NVIDIA layout {kernel: [VGPRs, LDS bytes, SGPRs, spill bytes per lane,
+        0]} (NVIDIA: [regs, smem, cmem, spill stores, spill loads]).
+        """
         MaxThreads = kwargs.get('MaxThreads', None)
-
-        if MaxThreads is not None:
-            flatWorkGroupSize = f'{self.WarpSize},{MaxThreads}'
-
-        wavesPerEU = f'{0},{0}'
         MinTeams = kwargs.get('MinTeams', None)
-        if MinTeams is not None:
-            if MaxThreads is not None:
-                MinWarpsPerCU = int((MinTeams * MaxThreads ) / self.WarpSize)
-            else:
-                MinWarpsPerCU = int((MinTeams * self.MaxThreadBlockSize) / self.WarpSize)
-            MinWarpsPerEU = int(MinWarpsPerCU / 4)
-            #We omit the max number as it is an optional argument
-            wavesPerEU = f'{MinWarpsPerEU}'
-
         compile_cmd = ['opt', f'{original}', f'-o {HashName}.image']
-
         if (MinTeams is not None) or (MaxThreads is not None):
             tuning_pass = os.getenv('RR_TUNING_PASS')
             assert tuning_pass, 'Expected env var for the tuning pass .so'
-            compile_cmd.append(f'--load={tuning_pass}')
-            compile_cmd.append('--enable-new-pm=0')
-            compile_cmd.append('--legacy-amdgpuattribute-pass')
-
+            compile_cmd += [f'--load={tuning_pass}', '--enable-new-pm=0',
+                            '--legacy-amdgpuattribute-pass']
+        # Same attribute values as OpenMPOpt's --bo-omp-autotune for AMDGCN.
         if MaxThreads is not None:
-            compile_cmd.append(f'--amdgpu-flat-work-group-size={flatWorkGroupSize}')
-
+            compile_cmd.append(f'--amdgpu-flat-work-group-size=1,{int(MaxThreads)}')
         if MinTeams is not None:
-            compile_cmd.append(f'--amdgpu-waves-per-eu={wavesPerEU}')
+            compile_cmd.append(
+                f'--amdgpu-waves-per-eu={self.getWavesPerEU(MaxThreads, MinTeams)}')
+        execute_command(' '.join(compile_cmd), capture_output=True, shell=True)
 
-        compile_cmd = ' '.join(compile_cmd)
+        # Different MinTeams often map to the same waves-per-EU, i.e. the same
+        # binary, so reuse the (slow) llc statistics.
+        wpe = self.getWavesPerEU(MaxThreads, MinTeams) if MinTeams is not None else None
+        src = os.path.realpath(original)
+        key = (src, os.path.getmtime(src), MaxThreads, wpe)
+        cache = self.__dict__.setdefault('_resourceCache', {})
+        if key not in cache:
+            llc_cmd = (f'llc -mtriple={self.Target} -mcpu={self.Arch} -O3 '
+                       f'-pass-remarks-analysis=kernel-resource-usage '
+                       f'{HashName}.image -o /dev/null')
+            _, _, stderr = execute_command(llc_cmd, capture_output=True, shell=True)
+            cache[key] = self.parseResourceUsage(stderr)
+        return {k: list(v) for k, v in cache[key].items()}
 
-        execute_command(compile_cmd, capture_output=True, shell=True)
-        # XXX: llc produces invalid code that the AMD plugin cannot read:
-        # "Error in hsa_executable_load_code_object: HSA_STATUS_ERROR_INVALID_CODE_OBJECT: The code object is invalid.
-        #compile_cmd = ' '.join(['llc','-O3', f'-o {Name}.image', f'{Name}.opt.out',
-        #    '-filetype=obj',
-        #    '-march=amdgcn',
-        #    '-mcpu=gfx90a',
-        #    '-mattr="+16-bit-insts,+ci-insts,+dl-insts,+dot1-insts,+dot2-insts,+dot3-insts,+dot4-insts,+dot5-insts,+dot6-insts,+dot7-insts,+dpp,+flat-address-space,+gfx8-insts,+gfx9-insts,+gfx90a-insts,+mai-insts,+s-memrealtime,+s-memtime-inst,+wavefrontsize64"'])
-        #execute_command(compile_cmd, capture_output=True, check=True, shell=True)
-
-        return None
+    @staticmethod
+    def parseResourceUsage(remarks):
+        """Parse llc -pass-remarks-analysis=kernel-resource-usage output."""
+        ret, name = {}, None
+        fields = {'VGPRs': 0, 'LDS Size [bytes/block]': 1, 'SGPRs': 2}
+        for line in remarks.splitlines():
+            m = re.search(r'remark: .*?(Function Name|[A-Za-z][A-Za-z ]*(?: \[[^]]*\])?): (\S+)', line)
+            if not m:
+                continue
+            key, value = m.group(1).strip(), m.group(2)
+            if key == 'Function Name':
+                name = value
+                ret[name] = [0, 0, 0, 0, 0]
+            elif name is None:
+                continue
+            elif key in fields:
+                ret[name][fields[key]] = int(value)
+            elif key == 'VGPRs Spill':
+                # 4 bytes per spilled VGPR as counted by the backend: a relative
+                # spill measure like ptxas' spill bytes, not scratch traffic.
+                ret[name][3] = 4 * int(value)
+        return ret
 
     def recordPrefix(self):
         # The replay region has no fixed-address mapping on AMDGPU, so it lands

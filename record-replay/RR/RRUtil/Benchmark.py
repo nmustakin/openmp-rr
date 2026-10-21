@@ -117,6 +117,9 @@ class Kernel:
         if 'RR_TIMING_WARMUP_MS' not in os.environ:
             Kernel.TimingWarmupMs = getattr(Device, 'TimingWarmupMs',
                                             Kernel.TimingWarmupMs)
+        # Compile-time features and point mapping use this device's limits.
+        from RRUtil.Search import set_device
+        set_device(Device)
         self.Name = name
         self.recorded = recorded
         self.HashName = hashname
