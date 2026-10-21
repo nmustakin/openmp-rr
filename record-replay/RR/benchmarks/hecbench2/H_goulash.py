@@ -3,12 +3,14 @@
 Built from /data2/nmn/rr-metrics/hecbench/src/goulash-omp with Makefile.rr (Makefile.aomp retargeted to nvptx64/sm_75 with the
 record-replay offload flags, hecbench/rr-build2). Run with: main 101 5
 """
+import os
 import re
 
 import RRUtil.Benchmark as Bench
 from RRUtil.Utilities import execute_command
 
-SRC = '/data2/nmn/rr-metrics/hecbench/src/goulash-omp'
+HECBENCH = os.environ.get('HECBENCH_ROOT', '/data2/nmn/rr-metrics/hecbench')
+SRC = f'{HECBENCH}/src/goulash-omp'
 
 
 class H_GOULASH(Bench.MakeBenchmark):
@@ -28,7 +30,7 @@ class H_GOULASH(Bench.MakeBenchmark):
         return execute_command('make -f Makefile.rr clean', capture_output=True, cwd=SRC, shell=True)
 
     def command(self):
-        return '/data2/nmn/rr-metrics/hecbench/src/goulash-omp/main 101 5'
+        return f'{HECBENCH}/src/goulash-omp/main 101 5'
 
     def env(self):
         return ''

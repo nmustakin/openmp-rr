@@ -3,12 +3,14 @@
 Built from /data2/nmn/rr-metrics/hecbench/src/groupnorm-omp with Makefile.rr (Makefile.aomp retargeted to nvptx64/sm_75 with the
 record-replay offload flags, hecbench/rr-build2). Run with: main 32 32 16 16 32 100
 """
+import os
 import re
 
 import RRUtil.Benchmark as Bench
 from RRUtil.Utilities import execute_command
 
-SRC = '/data2/nmn/rr-metrics/hecbench/src/groupnorm-omp'
+HECBENCH = os.environ.get('HECBENCH_ROOT', '/data2/nmn/rr-metrics/hecbench')
+SRC = f'{HECBENCH}/src/groupnorm-omp'
 
 
 class H_GROUPNORM(Bench.MakeBenchmark):
@@ -28,7 +30,7 @@ class H_GROUPNORM(Bench.MakeBenchmark):
         return execute_command('make -f Makefile.rr clean', capture_output=True, cwd=SRC, shell=True)
 
     def command(self):
-        return '/data2/nmn/rr-metrics/hecbench/src/groupnorm-omp/main 32 32 16 16 32 100'
+        return f'{HECBENCH}/src/groupnorm-omp/main 32 32 16 16 32 100'
 
     def env(self):
         return ''

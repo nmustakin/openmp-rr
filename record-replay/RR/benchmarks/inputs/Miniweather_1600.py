@@ -12,7 +12,8 @@ import re
 import RRUtil.Benchmark as Bench
 from RRUtil.Utilities import execute_command
 
-SRC = '/data2/nmn/rr-metrics/hecbench/src/miniWeather-omp-1600'
+HECBENCH = os.environ.get('HECBENCH_ROOT', '/data2/nmn/rr-metrics/hecbench')
+SRC = f'{HECBENCH}/src/miniWeather-omp-1600'
 
 
 class MINIWEATHER_1600(Bench.MakeBenchmark):

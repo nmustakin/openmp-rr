@@ -3,12 +3,14 @@
 Built from /data2/nmn/rr-metrics/hecbench/src/s8n-omp with Makefile.rr (Makefile.aomp retargeted to nvptx64/sm_75 with the
 record-replay offload flags, hecbench/rr-build2). Run with: main 1513 2048 100
 """
+import os
 import re
 
 import RRUtil.Benchmark as Bench
 from RRUtil.Utilities import execute_command
 
-SRC = '/data2/nmn/rr-metrics/hecbench/src/s8n-omp'
+HECBENCH = os.environ.get('HECBENCH_ROOT', '/data2/nmn/rr-metrics/hecbench')
+SRC = f'{HECBENCH}/src/s8n-omp'
 
 
 class H_S8N(Bench.MakeBenchmark):
@@ -28,7 +30,7 @@ class H_S8N(Bench.MakeBenchmark):
         return execute_command('make -f Makefile.rr clean', capture_output=True, cwd=SRC, shell=True)
 
     def command(self):
-        return '/data2/nmn/rr-metrics/hecbench/src/s8n-omp/main 1513 2048 100'
+        return f'{HECBENCH}/src/s8n-omp/main 1513 2048 100'
 
     def env(self):
         return ''

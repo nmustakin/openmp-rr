@@ -3,12 +3,14 @@
 Built from /data2/nmn/rr-metrics/hecbench/src/bspline-vgh-omp with Makefile.rr (Makefile.aomp retargeted to nvptx64/sm_75 with the
 record-replay offload flags, hecbench/rr-build2). Run with: main 
 """
+import os
 import re
 
 import RRUtil.Benchmark as Bench
 from RRUtil.Utilities import execute_command
 
-SRC = '/data2/nmn/rr-metrics/hecbench/src/bspline-vgh-omp'
+HECBENCH = os.environ.get('HECBENCH_ROOT', '/data2/nmn/rr-metrics/hecbench')
+SRC = f'{HECBENCH}/src/bspline-vgh-omp'
 
 
 class H_BSPLINE_VGH(Bench.MakeBenchmark):
@@ -28,7 +30,7 @@ class H_BSPLINE_VGH(Bench.MakeBenchmark):
         return execute_command('make -f Makefile.rr clean', capture_output=True, cwd=SRC, shell=True)
 
     def command(self):
-        return '/data2/nmn/rr-metrics/hecbench/src/bspline-vgh-omp/main'
+        return f'{HECBENCH}/src/bspline-vgh-omp/main'
 
     def env(self):
         return ''

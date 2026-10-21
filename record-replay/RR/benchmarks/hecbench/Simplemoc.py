@@ -10,7 +10,8 @@ import re
 import RRUtil.Benchmark as Bench
 from RRUtil.Utilities import execute_command
 
-SRC = '/data2/nmn/rr-metrics/hecbench/src/simplemoc-omp'
+HECBENCH = os.environ.get('HECBENCH_ROOT', '/data2/nmn/rr-metrics/hecbench')
+SRC = f'{HECBENCH}/src/simplemoc-omp'
 
 
 class SIMPLEMOC(Bench.MakeBenchmark):

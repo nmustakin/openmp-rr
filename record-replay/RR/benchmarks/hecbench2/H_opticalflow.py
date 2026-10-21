@@ -3,12 +3,14 @@
 Built from /data2/nmn/rr-metrics/hecbench/src/opticalFlow-omp with Makefile.rr (Makefile.aomp retargeted to nvptx64/sm_75 with the
 record-replay offload flags, hecbench/rr-build2). Run with: main /data2/nmn/rr-metrics/hecbench/src/opticalFlow-cuda/data/frame10.ppm /data2/nmn/rr-metrics/hecbench/src/opticalFlow-cuda/data/frame11.ppm
 """
+import os
 import re
 
 import RRUtil.Benchmark as Bench
 from RRUtil.Utilities import execute_command
 
-SRC = '/data2/nmn/rr-metrics/hecbench/src/opticalFlow-omp'
+HECBENCH = os.environ.get('HECBENCH_ROOT', '/data2/nmn/rr-metrics/hecbench')
+SRC = f'{HECBENCH}/src/opticalFlow-omp'
 
 
 class H_OPTICALFLOW(Bench.MakeBenchmark):
@@ -28,7 +30,7 @@ class H_OPTICALFLOW(Bench.MakeBenchmark):
         return execute_command('make -f Makefile.rr clean', capture_output=True, cwd=SRC, shell=True)
 
     def command(self):
-        return '/data2/nmn/rr-metrics/hecbench/src/opticalFlow-omp/main /data2/nmn/rr-metrics/hecbench/src/opticalFlow-cuda/data/frame10.ppm /data2/nmn/rr-metrics/hecbench/src/opticalFlow-cuda/data/frame11.ppm'
+        return f'{HECBENCH}/src/opticalFlow-omp/main {HECBENCH}/src/opticalFlow-cuda/data/frame10.ppm {HECBENCH}/src/opticalFlow-cuda/data/frame11.ppm'
 
     def env(self):
         return ''

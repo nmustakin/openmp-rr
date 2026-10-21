@@ -10,7 +10,8 @@ import re
 import RRUtil.Benchmark as Bench
 from RRUtil.Utilities import execute_command
 
-SRC = '/data2/nmn/rr-metrics/hecbench/src/sw4ck-omp'
+HECBENCH = os.environ.get('HECBENCH_ROOT', '/data2/nmn/rr-metrics/hecbench')
+SRC = f'{HECBENCH}/src/sw4ck-omp'
 
 
 class SW4CK(Bench.MakeBenchmark):
@@ -30,7 +31,7 @@ class SW4CK(Bench.MakeBenchmark):
         return execute_command('make -f Makefile.rr clean', capture_output=True, cwd=SRC, shell=True)
 
     def command(self):
-        return f'{SRC}/main /data2/nmn/rr-metrics/hecbench/src/sw4ck-cuda/sw4ck.in 2'.strip()
+        return f'{SRC}/main {HECBENCH}/src/sw4ck-cuda/sw4ck.in 2'.strip()
 
     def env(self):
         return ''

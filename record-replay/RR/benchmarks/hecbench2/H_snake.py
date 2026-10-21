@@ -3,12 +3,14 @@
 Built from /data2/nmn/rr-metrics/hecbench/src/snake-omp with Makefile.rr (Makefile.aomp retargeted to nvptx64/sm_75 with the
 record-replay offload flags, hecbench/rr-build2). Run with: main 100 /data2/nmn/rr-metrics/hecbench/src/snake-cuda/Datasets/ERR240727_1_E2_30000Pairs.txt 30000 1000
 """
+import os
 import re
 
 import RRUtil.Benchmark as Bench
 from RRUtil.Utilities import execute_command
 
-SRC = '/data2/nmn/rr-metrics/hecbench/src/snake-omp'
+HECBENCH = os.environ.get('HECBENCH_ROOT', '/data2/nmn/rr-metrics/hecbench')
+SRC = f'{HECBENCH}/src/snake-omp'
 
 
 class H_SNAKE(Bench.MakeBenchmark):
@@ -28,7 +30,7 @@ class H_SNAKE(Bench.MakeBenchmark):
         return execute_command('make -f Makefile.rr clean', capture_output=True, cwd=SRC, shell=True)
 
     def command(self):
-        return '/data2/nmn/rr-metrics/hecbench/src/snake-omp/main 100 /data2/nmn/rr-metrics/hecbench/src/snake-cuda/Datasets/ERR240727_1_E2_30000Pairs.txt 30000 1000'
+        return f'{HECBENCH}/src/snake-omp/main 100 {HECBENCH}/src/snake-cuda/Datasets/ERR240727_1_E2_30000Pairs.txt 30000 1000'
 
     def env(self):
         return ''

@@ -3,12 +3,14 @@
 Built from /data2/nmn/rr-metrics/hecbench/src/ga-omp with Makefile.rr (Makefile.aomp retargeted to nvptx64/sm_75 with the
 record-replay offload flags, hecbench/rr-build2). Run with: main 1000000 1000 11 1
 """
+import os
 import re
 
 import RRUtil.Benchmark as Bench
 from RRUtil.Utilities import execute_command
 
-SRC = '/data2/nmn/rr-metrics/hecbench/src/ga-omp'
+HECBENCH = os.environ.get('HECBENCH_ROOT', '/data2/nmn/rr-metrics/hecbench')
+SRC = f'{HECBENCH}/src/ga-omp'
 
 
 class H_GA(Bench.MakeBenchmark):
@@ -28,7 +30,7 @@ class H_GA(Bench.MakeBenchmark):
         return execute_command('make -f Makefile.rr clean', capture_output=True, cwd=SRC, shell=True)
 
     def command(self):
-        return '/data2/nmn/rr-metrics/hecbench/src/ga-omp/main 1000000 1000 11 1'
+        return f'{HECBENCH}/src/ga-omp/main 1000000 1000 11 1'
 
     def env(self):
         return ''

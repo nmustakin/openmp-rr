@@ -3,12 +3,14 @@
 Built from /data2/nmn/rr-metrics/hecbench/src/inversek2j-omp with Makefile.rr (Makefile.aomp retargeted to nvptx64/sm_75 with the
 record-replay offload flags, hecbench/rr-build2). Run with: main /data2/nmn/rr-metrics/hecbench/src/inversek2j-sycl/coord_in.txt 100000
 """
+import os
 import re
 
 import RRUtil.Benchmark as Bench
 from RRUtil.Utilities import execute_command
 
-SRC = '/data2/nmn/rr-metrics/hecbench/src/inversek2j-omp'
+HECBENCH = os.environ.get('HECBENCH_ROOT', '/data2/nmn/rr-metrics/hecbench')
+SRC = f'{HECBENCH}/src/inversek2j-omp'
 
 
 class H_INVERSEK2J(Bench.MakeBenchmark):
@@ -28,7 +30,7 @@ class H_INVERSEK2J(Bench.MakeBenchmark):
         return execute_command('make -f Makefile.rr clean', capture_output=True, cwd=SRC, shell=True)
 
     def command(self):
-        return '/data2/nmn/rr-metrics/hecbench/src/inversek2j-omp/main /data2/nmn/rr-metrics/hecbench/src/inversek2j-sycl/coord_in.txt 100000'
+        return f'{HECBENCH}/src/inversek2j-omp/main {HECBENCH}/src/inversek2j-sycl/coord_in.txt 100000'
 
     def env(self):
         return ''
