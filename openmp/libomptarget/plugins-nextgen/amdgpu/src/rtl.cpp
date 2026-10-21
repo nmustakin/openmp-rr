@@ -10,8 +10,12 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <chrono>
+#include <cmath>
+#include <dlfcn.h>
 #include <cstddef>
 #include <deque>
 #include <hsa.h>
@@ -58,6 +62,97 @@ struct AMDGPUEventManagerTy;
 struct AMDGPUDeviceImageTy;
 struct AMDGPUMemoryManagerTy;
 struct AMDGPUMemoryPoolTy;
+
+// Record-replay measurement (same environment variables and output lines as
+// the CUDA plugin, so the tuner parses both).
+static bool profileTimingEnabled() {
+  const char *TimingEnv = std::getenv("LIBOMPTARGET_RR_PROFILE_TIMING");
+  return TimingEnv && std::string(TimingEnv) != "0";
+}
+
+static long envLong(const char *Name, long Default) {
+  const char *Value = std::getenv(Name);
+  return Value ? std::strtol(Value, nullptr, 10) : Default;
+}
+
+// Kernel-level energy and the shader clock use ROCm SMI, loaded on demand so
+// the plugin does not need to link against it. The device is found by its PCI
+// address, which ROCR_VISIBLE_DEVICES does not remap.
+namespace rrsmi {
+typedef int (*InitFn)(uint64_t);
+typedef int (*NumDevicesFn)(uint32_t *);
+typedef int (*PciIdFn)(uint32_t, uint64_t *);
+typedef int (*EnergyFn)(uint32_t, uint64_t *, float *, uint64_t *);
+struct Frequencies {
+  uint32_t NumSupported;
+  uint32_t Current;
+  uint64_t Frequency[32];
+};
+typedef int (*ClockFn)(uint32_t, int, Frequencies *);
+static EnergyFn GetEnergy = nullptr;
+static ClockFn GetClock = nullptr;
+static uint32_t Index = 0;
+static bool Found = false;
+
+static bool init(hsa_agent_t Agent) {
+  static std::once_flag Once;
+  static bool Ok = false;
+  std::call_once(Once, [Agent]() {
+    void *Lib = dlopen("librocm_smi64.so", RTLD_NOW | RTLD_LOCAL);
+    if (!Lib)
+      Lib = dlopen("/opt/rocm/lib/librocm_smi64.so", RTLD_NOW | RTLD_LOCAL);
+    if (!Lib)
+      return;
+    auto Init = (InitFn)dlsym(Lib, "rsmi_init");
+    auto NumDevices = (NumDevicesFn)dlsym(Lib, "rsmi_num_monitor_devices");
+    auto PciId = (PciIdFn)dlsym(Lib, "rsmi_dev_pci_id_get");
+    GetEnergy = (EnergyFn)dlsym(Lib, "rsmi_dev_energy_count_get");
+    GetClock = (ClockFn)dlsym(Lib, "rsmi_dev_gpu_clk_freq_get");
+    uint32_t Bdf = 0, Domain = 0, Count = 0;
+    if (!Init || !NumDevices || !PciId || Init(0) != 0 ||
+        NumDevices(&Count) != 0 ||
+        hsa_agent_get_info(Agent, (hsa_agent_info_t)HSA_AMD_AGENT_INFO_BDFID,
+                           &Bdf) != HSA_STATUS_SUCCESS ||
+        hsa_agent_get_info(Agent, (hsa_agent_info_t)HSA_AMD_AGENT_INFO_DOMAIN,
+                           &Domain) != HSA_STATUS_SUCCESS)
+      return;
+    const uint64_t Want = (uint64_t(Domain) << 32) | (Bdf & 0xffff);
+    for (uint32_t I = 0; I < Count; ++I) {
+      uint64_t Id = 0;
+      if (PciId(I, &Id) == 0 && Id == Want) {
+        Index = I;
+        Found = true;
+        break;
+      }
+    }
+    if (!Found)
+      return;
+    uint64_t Counter, Stamp;
+    float Resolution;
+    Ok = GetEnergy && GetEnergy(Index, &Counter, &Resolution, &Stamp) == 0;
+  });
+  return Found;
+}
+
+// Current shader (system) clock in MHz, 0 when unavailable.
+static unsigned smClockMHz() {
+  Frequencies F;
+  if (!Found || !GetClock || GetClock(Index, /* RSMI_CLK_TYPE_SYS */ 0, &F) ||
+      F.Current >= F.NumSupported || F.NumSupported > 32)
+    return 0;
+  return unsigned(F.Frequency[F.Current] / 1000000);
+}
+
+static bool energyMilliJoules(double &Value) {
+  uint64_t Counter, Stamp;
+  float Resolution;
+  if (!Found || !GetEnergy || GetEnergy(Index, &Counter, &Resolution, &Stamp))
+    return false;
+  // The counter is in units of Resolution microjoules.
+  Value = double(Counter) * Resolution / 1.0e3;
+  return true;
+}
+} // namespace rrsmi
 
 namespace utils {
 
@@ -532,6 +627,9 @@ struct AMDGPUQueueTy {
     hsa_status_t Status =
         hsa_queue_create(Agent, QueueSize, HSA_QUEUE_TYPE_MULTI, callbackError,
                          nullptr, UINT32_MAX, UINT32_MAX, &Queue);
+    if (Status == HSA_STATUS_SUCCESS && profileTimingEnabled())
+      // Dispatch timestamps for timing replays.
+      Status = hsa_amd_profiling_set_profiler_enabled(Queue, 1);
     return Plugin::check(Status, "Error in hsa_queue_create: %s");
   }
 
@@ -1007,11 +1105,16 @@ public:
   /// the kernel args buffer to the specified memory manager.
   Error pushKernelLaunch(const AMDGPUKernelTy &Kernel, void *KernelArgs,
                          uint32_t NumThreads, uint64_t NumBlocks,
-                         AMDGPUMemoryManagerTy &MemoryManager) {
+                         AMDGPUMemoryManagerTy &MemoryManager,
+                         AMDGPUSignalTy **LaunchSignal = nullptr) {
     // Retrieve an available signal for the operation's output.
     AMDGPUSignalTy *OutputSignal = SignalManager.getResource();
     OutputSignal->reset();
     OutputSignal->increaseUseCount();
+    // The caller may read the signal's dispatch timestamps after waiting on it
+    // and before synchronizing the stream, which recycles the signal.
+    if (LaunchSignal)
+      *LaunchSignal = OutputSignal;
 
     std::lock_guard<std::mutex> StreamLock(Mutex);
 
@@ -2472,31 +2575,148 @@ Error AMDGPUKernelTy::launchImpl(GenericDeviceTy &GenericDevice,
   AMDHostDeviceTy &HostDevice = Plugin::get<AMDGPUPluginTy>().getHostDevice();
   AMDGPUMemoryManagerTy &ArgsMemoryManager = HostDevice.getArgsMemoryManager();
 
-  void *AllArgs = nullptr;
-  if (auto Err = ArgsMemoryManager.allocate(AllArgsSize, &AllArgs))
-    return Err;
-
-  // Initialize implicit arguments.
-  utils::AMDGPUImplicitArgsTy *ImplArgs =
-      reinterpret_cast<utils::AMDGPUImplicitArgsTy *>(
-          advanceVoidPtr(AllArgs, KernelArgsSize));
-
-  // Initialize the implicit arguments to zero.
-  std::memset(ImplArgs, 0, ImplicitArgsSize);
-
-  // Copy the explicit arguments.
-  // TODO: We should expose the args memory manager alloc to the common part as
-  // 	   alternative to copying them twice.
-  if (NumKernelArgs)
-    std::memcpy(AllArgs, *static_cast<void **>(KernelArgs),
-                sizeof(void *) * NumKernelArgs);
-
   AMDGPUDeviceTy &AMDGPUDevice = static_cast<AMDGPUDeviceTy &>(GenericDevice);
   AMDGPUStreamTy &Stream = AMDGPUDevice.getStream(AsyncInfoWrapper);
 
-  // Push the kernel launch into the stream.
-  return Stream.pushKernelLaunch(*this, AllArgs, NumThreads, NumBlocks,
-                                 ArgsMemoryManager);
+  // The stream releases each launch's argument buffer when the launch
+  // completes, so every launch needs its own.
+  auto Launch = [&](AMDGPUSignalTy **LaunchSignal) -> Error {
+    void *AllArgs = nullptr;
+    if (auto Err = ArgsMemoryManager.allocate(AllArgsSize, &AllArgs))
+      return Err;
+
+    // Initialize implicit arguments.
+    utils::AMDGPUImplicitArgsTy *ImplArgs =
+        reinterpret_cast<utils::AMDGPUImplicitArgsTy *>(
+            advanceVoidPtr(AllArgs, KernelArgsSize));
+
+    // Initialize the implicit arguments to zero.
+    std::memset(ImplArgs, 0, ImplicitArgsSize);
+
+    // Copy the explicit arguments.
+    // TODO: We should expose the args memory manager alloc to the common part
+    // as alternative to copying them twice.
+    if (NumKernelArgs)
+      std::memcpy(AllArgs, *static_cast<void **>(KernelArgs),
+                  sizeof(void *) * NumKernelArgs);
+
+    // Push the kernel launch into the stream.
+    return Stream.pushKernelLaunch(*this, AllArgs, NumThreads, NumBlocks,
+                                   ArgsMemoryManager, LaunchSignal);
+  };
+
+  if (!profileTimingEnabled())
+    return Launch(nullptr);
+
+  // Timing replays: optional untimed warm-up launches, then REPEATS launches
+  // timed by their dispatch timestamps (median reported in the ReplayTiming
+  // line), then optionally a back-to-back block of launches lasting at least
+  // ENERGY_MIN_MS bracketed by ROCm SMI energy reads. Repeated launches reuse
+  // the replayed buffers, so non-idempotent kernels see updated inputs; never
+  // combine with --verify.
+  const long Warmup = std::max(0L, envLong("LIBOMPTARGET_RR_TIMING_WARMUP", 0));
+  // GPU clocks ramp up from idle; a fixed launch count is too short for small
+  // kernels, so also warm up for a minimum wall time. In a batch replay the GPU
+  // is already at a steady clock after the first configuration, so later ones
+  // only re-warm briefly (LIBOMPTARGET_RR_TIMING_REWARM_MS).
+  static bool Warmed = false;
+  const long WarmupMs =
+      Warmed ? std::max(0L, envLong("LIBOMPTARGET_RR_TIMING_REWARM_MS", 100))
+             : std::max(0L, envLong("LIBOMPTARGET_RR_TIMING_WARMUP_MS", 0));
+  const long Repeats =
+      std::max(1L, envLong("LIBOMPTARGET_RR_TIMING_REPEATS", 1));
+  const long EnergyMinMs =
+      std::max(0L, envLong("LIBOMPTARGET_RR_ENERGY_MIN_MS", 0));
+  hsa_agent_t Agent = AMDGPUDevice.getAgent();
+  const bool HaveSmi = rrsmi::init(Agent);
+
+  auto WarmStart = std::chrono::steady_clock::now();
+  long WarmLaunches = 0;
+  for (;; ++WarmLaunches) {
+    double ElapsedMs = std::chrono::duration<double, std::milli>(
+                           std::chrono::steady_clock::now() - WarmStart)
+                           .count();
+    if (WarmLaunches >= Warmup && ElapsedMs >= WarmupMs)
+      break;
+    if (auto Err = Launch(nullptr))
+      return Err;
+    // Keep the queue shallow so elapsed time tracks GPU busy time.
+    if (WarmLaunches % 8 == 7)
+      if (auto Err = Stream.synchronize())
+        return Err;
+  }
+  if (auto Err = Stream.synchronize())
+    return Err;
+  if (Warmup > 0 || WarmupMs > 0)
+    printf("||ReplayWarmup|| launches: %ld sm_clock_mhz: %u\n", WarmLaunches,
+           HaveSmi ? rrsmi::smClockMHz() : 0);
+  if (WarmupMs > 0)
+    Warmed = true;
+
+  uint64_t TimestampFrequency = 0;
+  if (auto Err = Plugin::check(
+          hsa_system_get_info(HSA_SYSTEM_INFO_TIMESTAMP_FREQUENCY,
+                              &TimestampFrequency),
+          "Error in hsa_system_get_info: %s"))
+    return Err;
+  std::vector<double> Samples;
+  for (long I = 0; I < Repeats; ++I) {
+    AMDGPUSignalTy *Signal = nullptr;
+    if (auto Err = Launch(&Signal))
+      return Err;
+    if (auto Err = Signal->wait())
+      return Err;
+    hsa_amd_profiling_dispatch_time_t Time;
+    hsa_status_t Status =
+        hsa_amd_profiling_get_dispatch_time(Agent, Signal->get(), &Time);
+    if (auto Err = Stream.synchronize())
+      return Err;
+    if (auto Err = Plugin::check(
+            Status, "Error in hsa_amd_profiling_get_dispatch_time: %s"))
+      return Err;
+    double Ms = double(Time.end - Time.start) * 1.0e3 / TimestampFrequency;
+    Samples.push_back(Ms);
+    printf("||ReplayTimingSample|| duration_seconds: %.9g\n", Ms / 1.0e3);
+  }
+
+  std::vector<double> Sorted(Samples);
+  std::sort(Sorted.begin(), Sorted.end());
+  size_t N = Sorted.size();
+  double MedianMs =
+      N % 2 ? Sorted[N / 2] : 0.5 * (Sorted[N / 2 - 1] + Sorted[N / 2]);
+  printf("||ReplayTiming|| duration_seconds: %.9g\n", MedianMs / 1.0e3);
+  if (HaveSmi)
+    printf("||ReplayClock|| sm_clock_mhz: %u\n", rrsmi::smClockMHz());
+
+  if (EnergyMinMs > 0 && HaveSmi) {
+    long Launches =
+        std::max(1L, (long)std::ceil(EnergyMinMs / std::max(MedianMs, 1e-3)));
+    Launches = std::min(Launches, 1000000L);
+    double E0 = 0, E1 = 0;
+    bool Ok = rrsmi::energyMilliJoules(E0);
+    auto T0 = std::chrono::steady_clock::now();
+    for (long I = 0; I < Launches; ++I) {
+      if (auto Err = Launch(nullptr))
+        return Err;
+      if (I % 8 == 7)
+        if (auto Err = Stream.synchronize())
+          return Err;
+    }
+    if (auto Err = Stream.synchronize())
+      return Err;
+    auto T1 = std::chrono::steady_clock::now();
+    Ok = Ok && rrsmi::energyMilliJoules(E1);
+    double Seconds = std::chrono::duration<double>(T1 - T0).count();
+    if (Ok && E1 > E0)
+      printf("||ReplayEnergy|| joules_per_launch: %.9g avg_power_w: %.6g "
+             "launches: %ld window_seconds: %.6g\n",
+             (E1 - E0) / 1.0e3 / Launches, (E1 - E0) / 1.0e3 / Seconds,
+             Launches, Seconds);
+    else
+      printf("||ReplayEnergy|| unavailable\n");
+  }
+  fflush(stdout);
+  return Plugin::success();
 }
 
 GenericPluginTy *Plugin::createPlugin() { return new AMDGPUPluginTy(); }

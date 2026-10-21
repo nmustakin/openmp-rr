@@ -85,6 +85,8 @@ add_llvm_library(omptarget.rtl.amdgpu.nextgen SHARED
   PluginInterface
   ${LIBOMPTARGET_DEP_LIBRARIES}
   ${OPENMP_PTHREAD_LIB}
+  # dlopen of ROCm SMI for replay energy and clock readings.
+  ${CMAKE_DL_LIBS}
   "-Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/../exports"
   ${LDFLAGS_UNDEFINED}
 
