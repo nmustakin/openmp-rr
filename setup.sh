@@ -93,4 +93,14 @@ echo "export PATH=${INSTALL_DIR}/bin:\$PATH" > "${ENV_FILE}"
 echo "export LD_LIBRARY_PATH=${INSTALL_DIR}/lib:\$SPACK_ENV/.spack-env/view/lib:\$SPACK_ENV/.spack-env/view/lib:\$SPACK_ENV/.spack-env/view/lib64:\$SPACK_ENV/.spack-env/view/lib64:\$LD_LIBRARY_PATH" >> "${ENV_FILE}"
 echo "export LIBRARY_PATH=${INSTALL_DIR}:\$LIBRARY_PATH" >> "${ENV_FILE}"
 echo "export RR_TUNING_PASS=${INSTALL_DIR}/lib/libTuneDevice.so" >> "${ENV_FILE}"
+if [[ "${system}" == "amd" ]]; then
+  # The AMDGPU plugin needs the ROCm libraries; under `sg render` (see
+  # record-replay/RR/BUILD_AND_RUN.md) LD_LIBRARY_PATH and LIBRARY_PATH start unset.
+  ROCM=${ROCM_PATH:-/opt/rocm}
+  echo "export PATH=${INSTALL_DIR}/bin:\$PATH" > "${ENV_FILE}"
+  echo "export LD_LIBRARY_PATH=${INSTALL_DIR}/lib:${ROCM}/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}" >> "${ENV_FILE}"
+  echo "export LIBRARY_PATH=${INSTALL_DIR}\${LIBRARY_PATH:+:\$LIBRARY_PATH}" >> "${ENV_FILE}"
+  echo "export RR_TUNING_PASS=${INSTALL_DIR}/lib/libTuneDevice.so" >> "${ENV_FILE}"
+  echo "export ROCM_PATH=${ROCM}" >> "${ENV_FILE}"
+fi
 

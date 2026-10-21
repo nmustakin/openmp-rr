@@ -1185,7 +1185,9 @@ class Kernel:
                 todo.append(i)
         with open(f'{self.HashName}.json') as fd:
             mem_bytes = json.load(fd).get('DeviceMemorySize', 0)
-        devmem = max(4, int(math.ceil(2 * mem_bytes / 2 ** 30)) + 1)
+        # Room for the recording and its DEVICE_RESTORE backup, but at least
+        # the device's replay size (AMD needs a block reaching the recorded address).
+        devmem = max(self.Profiler.getReplayMem(), int(math.ceil(2 * mem_bytes / 2 ** 30)) + 1)
         env = (self.Replayer.env(profile_metrics=False, profile_activities=False,
                                  profile_timing=True, energy=False)
                + f' LIBOMPTARGET_RR_DEVICE_RESTORE=1 LIBOMPTARGET_RR_DEVMEM_SIZE={devmem}'

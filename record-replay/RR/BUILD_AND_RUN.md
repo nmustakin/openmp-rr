@@ -58,3 +58,77 @@ from this directory inside the container. Pass a recorded kernel name as the
 first argument to restrict the run. The script defaults to 30 initialization and 200
 optimizer samples per kernel. Optional second and third arguments override
 those counts, for example `bash run-minife-optimizer.sh all 5 30`.
+
+# AMD build and optimizer workflow
+
+Tested on 8 × MI50 (gfx906) with ROCm 5.7.1, GCC 12, and a native build (no
+container). `AMD_PORT_PLAN.md` explains the design and the MI50 measurements.
+
+## Prerequisites
+
+- Membership in the `render` and `video` groups for `/dev/kfd`. A session
+  started before the change does not have the group yet; run GPU commands
+  through `sg render -c '...'`. `sg` runs `/bin/sh` and drops
+  `LD_LIBRARY_PATH`, so source `env_amd.sh` inside the command, under bash.
+- `gcc-12` and `g++-12`.
+- Python 3.9 or newer (`optimize.py` uses `argparse.BooleanOptionalAction`).
+  Install the requirements without `pycuda`, plus `optuna==3.6.1` (and
+  `xgboost==2.1.4` for the ranking strategies), for example into a directory
+  on `PYTHONPATH`:
+  `python3.10 -m pip install --target <pylib> -r <requirements without pycuda>`.
+
+## Build
+
+```bash
+cd openmp-rr
+./setup.sh amd 56   # LLVM + clang + lld + OpenMP into install_amd_60, writes env_amd.sh
+source ./env_amd.sh
+```
+
+`setup.sh` also runs `pip`; to skip that, run its two CMake configurations by
+hand with `-DCMAKE_C_COMPILER=gcc-12 -DCMAKE_CXX_COMPILER=g++-12`. The AMD build
+needs `lld` (the plugin JIT-links the bitcode images), and the CUDA plugins
+are skipped automatically when nvmetrics is not found.
+
+## Run
+
+```bash
+sg render -c "bash -c 'source env_amd.sh; export PYTHONPATH=<pylib> ROCR_VISIBLE_DEVICES=0; \
+  cd record-replay/RR && python3.10 optimize.py -b benchmarks/miniFE-omp/MINIFE.py -d amd --record'"
+```
+
+Then run `-prk` and the optimization as in the NVIDIA section, with `-d amd`.
+The tuner selects the GPU with `ROCR_VISIBLE_DEVICES`.
+
+## How AMD differs
+
+- **Recording and replay without ASLR.** ROCm 5.7.1 cannot map memory at a
+  fixed device address, so the replay region lands where the allocator puts
+  it, and that depends on ASLR.
+  - The tuner records under `setarch -R`.
+  - `llvm-omp-kernel-replay` re-executes itself without ASLR
+    (`LIBOMPTARGET_RR_KEEP_ASLR=1` opts out).
+  - Recordings use a 12 GB region with 1 GB headroom
+    (`LIBOMPTARGET_RR_DEVMEM_HEADROOM_MB`). Replays use the device memory
+    size.
+  - A replay that cannot place the region at the recorded address aborts.
+    This happens with recordings made with ASLR on.
+- **Timing.**
+  - Timing replays use HSA dispatch timestamps.
+  - The timing warm-up defaults to 100 ms, because the MI50 has no
+    multi-step clock ramp.
+  - Kernel energy is integrated from ROCm SMI's average power, because the
+    MI50's energy counter is broken (`method: power_average` on the
+    `ReplayEnergy` line).
+- **Metrics.** Metrics replays run under `rocprof` with four counter passes,
+  one replay process each. The counters are listed in
+  `RRUtil/amd/rr_metrics.xml` and `Device.AMDGPU.MetricPasses`. The tuner
+  stores derived metrics: `achieved_occupancy_pct`, `valu_busy_pct`,
+  `dram_throughput_pct`, `l2_hit_pct`, `dram_read_bytes`,
+  `dram_write_bytes` and `scratch_bytes`.
+- **Launch bounds and registers.**
+  - `MaxThreads` and `MinTeams` become `amdgpu-flat-work-group-size=1,N` and
+    `amdgpu-waves-per-eu`.
+  - Registers and spills come from `llc -pass-remarks-analysis=kernel-resource-usage`.
+- **Not ported.** The `loads`, `stores` and `memory` objectives remain
+  NVIDIA-only. The bottleneck-classification thresholds are still the T4's.
