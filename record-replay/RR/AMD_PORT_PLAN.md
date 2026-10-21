@@ -281,6 +281,30 @@ classify every MI50 kernel as register. The disagreements:
 The thresholds were fit and evaluated on the same 24 kernels from two
 applications, so HeCBench is the out-of-sample check.
 
+### Phase 5.1: measurement validation (paper §4) on MI50 (2026-10-21)
+
+**Setup** (`~/rr-amd-work/phase5/validate_measurement.py`, results in
+`phase5/val/*.csv`, summary from `analyze_validation.py`):
+- Six LULESH kernels (l649, l844, l1029, l1721, l1913, l2103).
+- Five configurations each: baseline, full block, and the three best of the
+  calibration landscape.
+- Six rounds in randomized order, one GPU per kernel.
+- v2: one launch per process, no warm-up, process energy.
+- v3: 3 launches + 100 ms warm-up, median of 10 launches, kernel energy.
+
+| Quantity | v2 | v3 | T4 (paper) v2 → v3 |
+|---|---|---|---|
+| Cross-process CV of duration (median) | 9.3% | 0.30% | 8.4% → 0.23% |
+| Std of log speedup across rounds | 0.133 | 0.004 | 0.114 → 0.003 |
+| Kendall τ between rounds | 0.60 | 1.00 | 0.24 → 0.77 |
+| Spearman ρ, duration vs energy | −0.25 to 0.75 | 0.75 to 1.00 | −0.9..0.8 → 0.8..1.0 |
+| Wall time per replay process | 2.9 s | 3.4 s | 2.9 → 4.3 s |
+
+- The legacy noise on MI50 comes from the slow first launch of a process
+  (8–130% slower), not from a clock ramp.
+- The landscape winners replicate in the randomized rounds: l1721 4.63×,
+  l844 4.33×, l1913 3.43×, l649 1.85×, l1029 1.76×, l2103 1.13×.
+
 ### Remaining
 
 1. **Phase 5 measurement validation** (paper §4, Table `tab:measurement`):
