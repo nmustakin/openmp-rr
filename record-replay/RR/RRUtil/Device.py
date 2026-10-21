@@ -318,6 +318,14 @@ class NVIDIA(metaclass=DeviceSingleton):
     def getRecordMem(self):
         return 4
 
+    def getReplayMem(self):
+        # The replay region is mapped at the recorded address (mMap).
+        return 4
+
+    def blockFits(self, regs, threads):
+        """Whether a block of `threads` with `regs` registers per thread fits."""
+        return regs * threads <= self.MaxRegBlock
+
     def command(self):
         return self._profile
 
@@ -723,6 +731,19 @@ class AMDGPU(metaclass=DeviceSingleton):
         # The heuristic region loses up to 2 GB to alignment and keeps 1 GB of
         # headroom (LIBOMPTARGET_RR_DEVMEM_HEADROOM_MB), so allocate more.
         return 12
+
+    def getReplayMem(self):
+        # Without a fixed-address mapping the replay block must be large
+        # enough to reach down to the recorded address.
+        return self.getMaxMem()
+
+    def blockFits(self, vgprs, threads):
+        """Whether one work-group of `threads` with `vgprs` VGPRs fits a CU:
+        VGPRs are allocated in blocks of 4 out of 256 per lane and SIMD, and the
+        work-group's waves are spread over the 4 SIMDs."""
+        waves = math.ceil(threads / self.WarpSize)
+        per_simd = min(self.MaxWavesPerCU // 4, 256 // (math.ceil(max(vgprs, 1) / 4) * 4))
+        return waves <= 4 * per_simd
 
     def command(self):
         return self._profile

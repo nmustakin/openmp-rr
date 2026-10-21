@@ -129,7 +129,7 @@ class Kernel:
             if not Path(self.original).exists():
                 shutil.copyfile(f'{hashname}.image', self.original)
         self.Profiler = Device
-        self.Replayer = self.OMPReplayer(4) #request 4Gb memory
+        self.Replayer = self.OMPReplayer(Device.getReplayMem())
         self.dbDir = dbDir
         self.profiled = False
         self.NumRegs = -1
@@ -778,7 +778,8 @@ class Kernel:
             print(f'Prior: {len(options["prior_points"])} top configs from '
                   f'{others.kid.nunique()} {klass} kernels', flush=True)
         else:
-            sm_pct = base_metrics.get('sm__throughput.avg.pct_of_peak_sustained_elapsed')
+            from RRUtil.Search import metric
+            sm_pct = metric(base_metrics, 'sm_util')
             if self.SaturatedSMPct > 0 and sm_pct is not None and sm_pct > self.SaturatedSMPct:
                 print(f'Baseline SM throughput {sm_pct:.1f}% > {self.SaturatedSMPct}%: '
                       f'compute-saturated, budget {budget} -> {self.SaturatedBudget}', flush=True)
@@ -998,9 +999,9 @@ class Kernel:
                     db.AddSamples(self.getDefaultKey(), BDuration, BEnergy)
             values = objective_values(db.Speedup(key), db.EnergyImprov(key))
             metrics = db.Data[key].get('metrics', {})
-            values['spill'] = metrics.get('l1tex__t_requests_pipe_lsu_mem_local_op_ld.sum', 0.0)
-            values['occupancy'] = metrics.get(
-                'sm__warps_active.avg.pct_of_peak_sustained_active', float('nan'))
+            from RRUtil.Search import metric
+            values['spill'] = metric(metrics, 'spill', 0.0)
+            values['occupancy'] = metric(metrics, 'occupancy', float('nan'))
             searcher.tell(point, values)
             trace.append({'step': step, 'key': key, 'source': source, 'class': klass,
                           'cost': spent, 'wall': time.perf_counter() - t_start,
@@ -1178,7 +1179,7 @@ class Kernel:
         todo = []
         for i, c in enumerate(configs):
             nt = c.get('NumThreads')
-            if regs is not None and nt is not None and regs * nt > self.Profiler.MaxRegBlock:
+            if regs is not None and nt is not None and not self.Profiler.blockFits(regs, nt):
                 out[i] = (False, None)
             else:
                 todo.append(i)
@@ -1243,7 +1244,7 @@ class Kernel:
         if StaticStats:
             SStats = StaticStats[self.Name]
             if NumThreads is not None:
-                if ( SStats[0] * NumThreads > self.Profiler.MaxRegBlock ):
+                if not self.Profiler.blockFits(SStats[0], NumThreads):
                     return False, None, None, None, None, None, None
             if ( SStats[1] > self.Profiler.MaxSharedMemBlock ) :
                 return False, None, None, None, None, None, None
@@ -1433,7 +1434,8 @@ class Kernel:
             state['Profiler'] = Device.getDevice(state['Profiler']['Name'])
         # Recreate Replayer based on the restored state.
         self.__dict__.update(state)
-        self.Replayer = self.OMPReplayer(4)  # Recreate Replayer assuming it can be fully reconstructed.
+        # Recreate Replayer assuming it can be fully reconstructed.
+        self.Replayer = self.OMPReplayer(self.Profiler.getReplayMem())
 
     def to_dict(self):
         ret = dict()

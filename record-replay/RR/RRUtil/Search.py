@@ -108,6 +108,29 @@ class DeviceLimits:
 
 LIMITS = DeviceLimits()
 
+# Metric names per role. The roles were defined on the T4; the AMD equivalents
+# are the closest rocprof-derived metrics (Device.AMDGPU.parseMetrics), and the
+# classification thresholds have not been recalibrated for them yet.
+METRIC_ROLES = {
+    'nvidia': {
+        'sm_util': 'sm__throughput.avg.pct_of_peak_sustained_elapsed',
+        'dram_util': 'dram__throughput.avg.pct_of_peak_sustained_elapsed',
+        'occupancy': 'sm__warps_active.avg.pct_of_peak_sustained_active',
+        'spill': 'l1tex__t_requests_pipe_lsu_mem_local_op_ld.sum',
+    },
+    'amd': {
+        'sm_util': 'valu_busy_pct',
+        'dram_util': 'dram_throughput_pct',
+        'occupancy': 'achieved_occupancy_pct',
+        'spill': 'scratch_bytes',
+    },
+}
+
+
+def metric(metrics, role, default=None):
+    """Value of a metric role for the current device."""
+    return metrics.get(METRIC_ROLES[LIMITS.vendor][role], default)
+
 
 def set_device(prof):
     """Use the limits of a Device.NVIDIA or Device.AMDGPU."""
@@ -218,10 +241,10 @@ def classify_bottleneck(metrics, sm_saturated=80.0):
     compute-saturated kernels had nothing to gain; locality-bound kernels gain
     by cutting DRAM traffic; register-bound kernels gain from launch bounds.
     """
-    sm = metrics.get('sm__throughput.avg.pct_of_peak_sustained_elapsed')
-    dram = metrics.get('dram__throughput.avg.pct_of_peak_sustained_elapsed')
-    occ = metrics.get('sm__warps_active.avg.pct_of_peak_sustained_active')
-    spill = metrics.get('l1tex__t_requests_pipe_lsu_mem_local_op_ld.sum', 0) or 0
+    sm = metric(metrics, 'sm_util')
+    dram = metric(metrics, 'dram_util')
+    occ = metric(metrics, 'occupancy')
+    spill = metric(metrics, 'spill', 0) or 0
     if sm is None or dram is None or occ is None:
         return 'unknown'
     # Compute-saturated means the SM pipes are busy *and* memory is not: a
@@ -240,9 +263,9 @@ def classify_bottleneck(metrics, sm_saturated=80.0):
 def classification_margin(metrics, sm_saturated=80.0):
     """Smallest distance (percentage points) of the metrics used by
     classify_bottleneck to its thresholds; -1 if a metric is missing."""
-    sm = metrics.get('sm__throughput.avg.pct_of_peak_sustained_elapsed')
-    dram = metrics.get('dram__throughput.avg.pct_of_peak_sustained_elapsed')
-    occ = metrics.get('sm__warps_active.avg.pct_of_peak_sustained_active')
+    sm = metric(metrics, 'sm_util')
+    dram = metric(metrics, 'dram_util')
+    occ = metric(metrics, 'occupancy')
     if sm is None or dram is None or occ is None:
         return -1.0
     return float(min(abs(sm - sm_saturated), abs(dram - 70), abs(occ - 80), abs(occ - 60)))
