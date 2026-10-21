@@ -96,6 +96,43 @@ Running:
     `personality(ADDR_NO_RANDOMIZE)`.
   - The Python recorder prefixes `setarch -R` on AMD.
 
+  Both are done (`87e10546e`). In the same commit:
+  - The heuristic recording region keeps 1 GB of headroom
+    (`LIBOMPTARGET_RR_DEVMEM_HEADROOM_MB`). The replay tool's block ends about
+    24 MB lower than the application's, which made every miniFE replay fault.
+  - The region allocator is bounds-checked.
+  - AMD records with 12 GB and replays with 15 GB.
+- Result: all 17 LULESH and 7 miniFE kernels replay and verify on MI50.
+  Recordings are in `~/rr-amd-work/{lulesh,minife}/rec`.
+
+### Phase 2 progress (2026-10-21)
+
+Done:
+- **Timing** (`a19f1c397`). HSA dispatch timestamps, same env vars and
+  output lines as CUDA.
+- **Energy** (`f19fb0e8c`). The MI50 energy counter reads a constant
+  `0xFFFFFFFF`. Energy is instead integrated from `rsmi_dev_power_ave_get`
+  (updates every ~8 ms, 1 W resolution), sampled every 2 ms over exactly the
+  launch window. The line is tagged `method: power_average`.
+  - LULESH l1721, two processes: 4.227 / 4.223 ms and 0.680 / 0.679 J per
+    launch, at about 160 W.
+- **Device-to-device restore** (`afb67290b`). An 8-configuration batch on
+  l649 took 7.6 s instead of 11.9 s. `--verify` now compares only the
+  recorded length; the restore backup made every restore replay fail.
+
+**MI50 clock ramp** (LULESH l1721; 8 cold processes after 10 s idle vs 8
+processes with 3 s warm-up; data in `~/rr-amd-work/clock-ramp/l1721.csv`):
+- Only the first launch of a cold process is slow (4.55–5.20 ms vs 4.22 ms).
+  From the second launch on, every process is at 1725 MHz.
+- Cross-process CV of the median is 0.03% cold and 0.04% warm. On the T4 it
+  was 8.4%.
+- So the T4's 1000 ms warm-up is unnecessary on MI50; a few warm-up launches
+  suffice. Confirm on a short kernel (l2103) before lowering the AMD defaults.
+
+Remaining for phase 2:
+- Hardware metrics through rocprofiler v1.
+- `kernel_activities.csv`.
+
 ## Phase 2: AMDGPU plugin measurement (`plugins-nextgen/amdgpu`)
 
 All changes are opt-in through the same environment variables as CUDA.
