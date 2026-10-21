@@ -169,6 +169,61 @@ writes the `kernel_activities.csv` the tuner reads. Validation:
     `PYTHONPATH=~/rr-amd-work/pylib`.
   - That pylib holds the requirements without pycuda, plus optuna 3.6.1 and
     xgboost 2.1.4.
+- **Compile path** (`3bd6a4d70`). `Device.AMDGPU.deviceCompile` sets the same
+  attributes as OpenMPOpt's `--bo-omp-autotune` (`amdgpu-flat-work-group-size=1,N`,
+  `amdgpu-waves-per-eu`, now clamped to [1, 10]). VGPRs, SGPRs, LDS and spills
+  come from llc's `kernel-resource-usage` remarks.
+- **Search model** (`3bd6a4d70`). `Search.set_device` replaces the T4
+  constants. The gfx9 VGPR occupancy model matches llc on all 17 LULESH
+  kernels.
+  - l844: 64 VGPRs and spills at the default bounds, 203 VGPRs and no spills
+    at MaxThreads ≤ 256.
+  - The table has 122 pairs and takes 156 s, with llc results cached per
+    binary.
+- **Metric roles and replay** (`3fbd3eee6`, `98d69f20f`).
+  - `Search.METRIC_ROLES` maps the classification and steering roles to AMD
+    metrics.
+  - Replays and batch replays use the device replay size (15 GB); with 4 GB
+    every AMD replay failed.
+  - `Device.blockFits` replaces the registers × threads check. The old
+    `MaxRegBlock = 0` rejected every AMD configuration.
+- **End-to-end** on vAdd with `optimize.py -d amd`:
+  - `--record` works.
+  - A `BOMN` run completes.
+  - `Kernel.Search` `adaptive` classifies from rocprof metrics and runs
+    trees-meta with the compile table.
+  - `tpe-batch` screens with batch replay.
+
+### Phase 4 progress
+
+- The HeCBench wrappers use `HECBENCH_ROOT` (`acb804d9b`).
+- `benchmarks/hecbench/make_rr_amd.sh` writes `Makefile.rr` from HeCBench's
+  own `Makefile.aomp`; all 152 wrapped applications have one. HeCBench is
+  cloned at `~/HeCBench` (`f0c817aa3`) and `Makefile.rr` is generated there.
+- XSBench builds, records and replays with verified output.
+- Not yet done:
+  - the testSNAP/miniBUDE data from HeCBench's data store;
+  - miniWeather's MPI (stub or OpenMPI);
+  - the input sizes chosen for the T4 (0.1–100 ms kernels), which need
+    re-checking on MI50.
+
+### Remaining
+
+1. **Phase 5 measurement validation** (paper §4, Table `tab:measurement`):
+   cross-process CV, Kendall τ, and energy vs duration on six LULESH kernels.
+   This needs a driver like the paper's (not in the repo). Use the tuner's
+   own LULESH/miniFE recordings (`optimize.py --record`).
+2. **Recalibrate the classification thresholds** on MI50 warm baselines.
+   MI50 has 1/2-rate FP64 and HBM2, so the T4's compute-saturated kernels
+   may change class.
+3. **Open questions:**
+   - GPU-to-GPU timing differences (the l2103 warm-vs-cold discrepancy
+     between GPU 1 and GPU 3).
+   - Whether the work-group cap of 16 per CU in `_amd_blocks_per_cu` holds on
+     gfx906.
+4. **Pre-existing tuner issue, not AMD-specific:** proposals that repeat
+   measured configurations cost no budget, so a search that only repeats
+   runs until the wall-clock cap.
 
 ## Phase 2: AMDGPU plugin measurement (`plugins-nextgen/amdgpu`)
 
