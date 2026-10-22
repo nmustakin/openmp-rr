@@ -89,7 +89,14 @@ online results within their confidence intervals (for example, the final tuner
 with refinement ties batch TPE at 0.9993 of its shipped speedup in a third of
 its time) and the input and training-set results, while the regression transfer
 model is stronger on that GPU and removes the ranking model's lead at 48
-training kernels.
+training kernels. A port to an AMD Instinct MI50 needed record and replay
+without a fixed-address device mapping and kernel energy from sampled power,
+and the v3 measurement reduced the cross-process variation from 9.3\% to 0.30\%
+as on the T4. The bottleneck classes did not carry over: five LULESH kernels
+gained 3.0\x{} to 4.6\x{} on the MI50 by removing the register spills of their
+default build, and the rules had to test for spills first. The final tuner
+shipped 3.2\% faster configurations than batch TPE on the MI50 in less than
+half its time (201~s against 436~s per kernel).
 \end{abstract}
 
 \tableofcontents
@@ -2528,6 +2535,219 @@ sets depends on the GPU.
 
 
 %=============================================================================
+\section{Port to an AMD GPU}
+\label{sec:amd}
+All results so far come from NVIDIA GPUs of one architecture. To test whether
+the measurement method, the bottleneck classes, and the final tuner carry over
+to a GPU of another vendor and architecture, we ported the record and replay
+runtime and the tuner to AMD GPUs and repeated the measurement validation of
+Section~\ref{sec:measurement}, the classification of Section~\ref{sec:adaptive},
+and the final-tuner comparison of Section~\ref{sec:confirm} on an AMD Instinct
+MI50. The port needed changes in the runtime, because AMD's software stack lacks
+a fixed-address device mapping and a working energy counter on this GPU, but the
+measurement and the final tuner behave as on the T4. The bottleneck classes do
+not: the largest gains on the MI50 come from removing register spills, and the
+classification rules had to be recalibrated.
+
+\subsection{Setup}
+\label{sec:amd-setup}
+The node has eight AMD Instinct MI50 GPUs (Vega 20, \code{gfx906}, 60 compute
+units, 16~GB of HBM2 at about 1~TB/s, a 300~W board power limit) with ROCm~5.7.1.
+A compute unit (CU) holds up to 40 wavefronts of 64 threads, and the MI50
+executes FP64 arithmetic at half its FP32 rate, against 1/32 on the T4. We built
+the same LLVM~16-based runtime natively with GCC~12 for the AMDGPU offload
+target, recorded LULESH and miniFE with the inputs of
+Section~\ref{sec:setup} and the HeCBench applications of
+Section~\ref{sec:hecbench} at HeCBench commit \code{f0c817aa3}, and compiled for
+\code{gfx906} with the offload flags of the NVIDIA builds. HeCBench builds its
+OpenMP versions for AMD GPUs already, so each application only needed the
+record and replay flags added to its own AMD makefile.
+
+\subsection{Changes to the runtime and the tuner}
+\label{sec:amd-port}
+Record and replay itself is vendor neutral, but replaying a kernel requires
+its device memory at the address where it was recorded, because the recorded
+memory contains pointers. The CUDA plugin reserves that address range with the
+virtual memory management API of CUDA. ROCm~5.7.1 offers no equivalent, so the
+AMD plugin allocates a large block and places the recorded region inside it,
+and the block's address depends on address-space layout randomization (ASLR).
+With ASLR, three of four vAdd replays faulted. We therefore record under
+\code{setarch -R}, and the replay tool re-executes itself with ASLR disabled.
+The replay tool's block then ended about 24~MB below the recording
+application's block, which made every miniFE replay fault at the end of its
+3~GB region, so recordings leave 1~GB unused at the top of the block. We also
+found and fixed two errors that let a recording overflow its block without
+notice: the region allocator had no bounds check, and an alignment adjustment
+grew the region instead of shrinking it. With these changes, all 17 LULESH and
+7 miniFE kernels replayed and verified their output.
+
+The measurement of Section~\ref{sec:measurement} was ported to the AMD plugin
+with the same environment variables and output, so the tuner parses both
+plugins alike. Kernel time comes from the dispatch timestamps of the HSA
+runtime instead of CUDA events. The MI50's energy accumulator reads a constant
+\code{0xFFFFFFFF}, so the plugin samples ROCm SMI's average power, which the
+GPU updates about every 8~ms, every 2~ms during the 300~ms energy window and
+integrates it over exactly that window. In two replay processes of LULESH
+l1721, the kernel took 4.227 and 4.223~ms and 0.680 and 0.679~J per launch. The
+plugin also restores the batch-replay inputs with a device-to-device copy
+(Section~\ref{sec:batch}), which cut an eight-configuration batch of l649 from
+11.9~s to 7.6~s. Hardware metrics come from AMD's \code{rocprof} with four
+counter passes, each in its own replay process, so that every pass starts from
+the recorded inputs, as CUPTI's kernel replay does. The counters give DRAM bytes
+read and written, the L2 hit rate, the memory unit and vector ALU busy times,
+and achieved occupancy, for which we added the \code{gfx906} wave-level
+counters to \code{rocprof}'s definitions. Occupancy was exact on a launch of
+one wavefront per CU, and DRAM bytes matched the arrays that vAdd reads and
+writes.
+
+The launch bounds map to the AMDGPU function attributes
+\code{amdgpu-flat-work-group-size} (\code{MaxThreads}) and
+\code{amdgpu-waves-per-eu} (\code{MinTeams}), with the same values that the
+compiler uses for the tuned build, and registers and spills come from the
+compiler's resource-usage remarks instead of \code{ptxas}. The compile-time
+features of Section~\ref{sec:treesmeta} use an occupancy model of \code{gfx906},
+in which vector registers (VGPRs) are allocated in blocks of four out of 256
+per lane and SIMD unit; the model matched the compiler's occupancy on all 17
+LULESH kernels.
+
+\subsection{Measurement}
+\label{sec:amd-measurement}
+The MI50 has no clock ramp of the kind that dominated the legacy
+measurements on the T4. Figure~\ref{fig:mi50ramp} repeats the experiment of
+Figure~\ref{fig:ramp}. In processes started from an idle GPU, only the first
+launch of l1721 was slow (8\% to 23\%), while the short kernel l2103 stepped
+through two short plateaus and settled after about 20 launches, about 10~ms of
+GPU time. A sweep of the warm-up time on l2103 in six interleaved rounds gave
+the same median for warm-ups from 100~ms to 3~s, and 1.2\% more time without a
+warm-up, so the AMD default is 100~ms instead of 1000~ms, which saves about
+0.9~s per replay process.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{mi50_ramp}
+\caption{Per-launch kernel time on the MI50 in eight replay processes started from an idle GPU (blue) and in eight processes that first warmed up the GPU for 3~s (orange), for a long (left) and a short (right) LULESH kernel. Only the first launches of a cold process are slow; the two spikes of the warmed l1721 processes are single launches.}
+\label{fig:mi50ramp}
+\end{figure}
+
+Table~\ref{tab:mi50measurement} repeats the validation of
+Table~\ref{tab:measurement} on six LULESH kernels, with five configurations
+each (the baseline, a full block, and the three best configurations of the
+landscapes of Section~\ref{sec:amd-classes}) in six rounds with randomized
+order. The new method reduced the cross-process variation from 9.3\% to
+0.30\% and made the ranking of configurations identical in every pair of rounds.
+The legacy noise has a different cause on the MI50: the legacy method times the
+first launch of a process, which is 8\% to 130\% slower than the following
+launches. The configurations found by the landscapes replicated in the
+randomized rounds, for example 4.63\x{} on l1721 and 4.33\x{} on l844.
+
+\begin{table}[t]
+\centering
+\caption{Legacy (v2) and new (v3) replay measurement on six LULESH kernels on the MI50, with the T4 values of Table~\ref{tab:measurement}.}
+\label{tab:mi50measurement}
+\begin{tabular}{lrrr}
+\toprule
+Quantity & Legacy (v2) & New (v3) & T4, v2 $\to$ v3 \\
+\midrule
+Cross-process CV of duration (median configuration) & 9.3\% & 0.30\% & 8.4\% $\to$ 0.23\% \\
+Standard deviation of log speedup across rounds & 0.133 & 0.004 & 0.114 $\to$ 0.003 \\
+Kendall $\tau$ of configuration ranking between rounds & 0.60 & 1.00 & 0.24 $\to$ 0.77 \\
+Spearman $\rho$ of duration and energy across configurations & $-0.25$ to 0.75 & 0.75 to 1.00 & $-0.9$ to 0.8 $\to$ 0.8 to 1.0 \\
+Wall time per replay process & 2.9~s & 3.4~s & 2.9~s $\to$ 4.3~s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Bottleneck classes on the MI50}
+\label{sec:amd-classes}
+To recalibrate the classes, we measured, for each of the 24 LULESH and miniFE
+kernels, three warm baseline profiles and an exhaustive batch landscape (every
+binary class, every multiple of 64 threads, and nine teams fractions, 144 to
+1053 configurations per kernel), and fully measured the best configuration. We
+labeled each kernel by what its best configuration changed: \emph{register} if
+it removed the default binary's spills or used another binary, \emph{locality}
+if it read at least 25\% less from DRAM with the same binary, \emph{other} if
+only the runtime parameters changed, and \emph{none} if it gained at most 5\%.
+
+The MI50 gains far more than the T4 on LULESH. The kernels l1721, l1080, l844,
+l1913, and l584 gained 3.0\x{} to 4.6\x{}, including the three kernels that had
+nothing to gain on the T4 (l584, l1721, l1913). All five spill at the default
+launch bounds, because a work-group of 1024 threads limits a kernel to 64
+VGPRs, and \code{MaxThreads} of 512 or less let them use 121 to 203 VGPRs
+without spills. Their DRAM reads fell by 80\% to 88\%, because the spill traffic
+disappeared, so a test for locality would also accept them. No kernel was
+compute saturated, since the vector ALUs were busy at most 16\% of the time,
+and the two kernels with nothing to gain (l1340, l1377) had the same baseline
+metrics as kernels that gained 1.06\x{} to 1.25\x{}. Baseline occupancy was
+about 37\% for almost every kernel, so the occupancy thresholds of
+Section~\ref{sec:adaptive} did not separate the classes.
+
+We changed the rules for AMD in three ways. First, a kernel whose default
+binary spills more than 64~bytes is register bound, and this test comes before
+the locality test. The spills come from the compiler, because the scratch size
+in the profile also counts stack, such as the 16~KB per lane of the OpenMP
+reduction buffers. Second, a kernel is locality bound if its DRAM throughput
+exceeds 45\% of peak, without an occupancy condition. Third, a kernel is
+register bound otherwise if its occupancy is below 20\%. The compute rule keeps
+its T4 thresholds. The new rules matched 18 of the 24 labels and the T4 rules
+11, which classify every MI50 kernel as register bound. On 22 HeCBench kernels
+that were not used to set the thresholds (Section~\ref{sec:amd-hecbench}), both
+rule sets matched 15 labels, because 15 of these kernels are register bound.
+The spill test generalized: all nine kernels across both sets whose default
+binary spilled heavily gained 2.2\x{} to 4.6\x{}. The occupancy test did not,
+because several S3D kernels have low occupancy at their default launch and gain
+from the runtime parameters alone.
+
+\subsection{Final tuner}
+\label{sec:amd-tuner}
+We compared the final tuner of Section~\ref{sec:confirm} (ranking model,
+batch screening, patience stop after two batches, batch confirmation, and
+refinement), batch TPE, and the adaptive pipeline on the ten LULESH kernels of
+the online studies and the seven miniFE kernels, with three seeds each and a
+300~s cap for the batch strategies. The ranking model was trained on the MI50
+landscapes of the other kernels, and the adaptive pipeline had 30 full
+evaluations instead of 60, because each full evaluation on the MI50 includes
+four profiled replay processes. The shipped configurations were re-measured with
+the baseline in five randomized rounds, as before.
+
+\begin{table}[t]
+\centering
+\caption{Final tuner, batch TPE, and the adaptive pipeline on the MI50 (17 LULESH and miniFE kernels, three seeds). True speedups are geometric means over kernels with a kernel-clustered bootstrap 95\% interval; times are means per run, end to end, with compile tables computed beforehand.}
+\label{tab:mi50tuner}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+Strategy & True speedup & Share of attainable gain & End to end & Ratio to batch TPE \\
+\midrule
+Final tuner (\code{rank-confirm}) & 1.84 [1.46, 2.38] & 0.93 & 201~s & 1.032 [1.005, 1.065] \\
+Batch TPE (\code{tpe-batch}) & 1.78 [1.40, 2.32] & 0.87 & 436~s & -- \\
+Adaptive, 30 full evaluations & 1.55 [1.24, 1.97] & 0.65 & 1381~s & 0.87 [0.81, 0.92] \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:mi50tuner} shows that the final tuner carries over to the MI50.
+It needed less than half the time of batch TPE and shipped configurations that
+were 3.2\% faster, with an interval that excludes no gain, whereas the two tied
+on the T4. Most of its advantage came from l649, l1029, l254, and l290. The
+adaptive pipeline with full evaluations was slower and reached less of the
+attainable gain, because a profiled evaluation costs about 30~s on the MI50 and
+its 30 evaluations did not reach the large gains of the spilling kernels.
+
+\subsection{HeCBench}
+\label{sec:amd-hecbench}
+All ten HeCBench applications of Section~\ref{sec:hecbench} built, recorded,
+and replayed on the MI50, with 51 recorded kernels. The 13 S3D teams regions
+without a trip count were excluded as on the T4, and 11 further kernels ran
+for less than 0.1~ms on the MI50, among them eight of the nine miniWeather
+kernels. The tuner's kernel discovery ignores kernels that launch a single team,
+and at AMD's default of 256 threads the minisweep loops of 200 to 240
+iterations launch one team, so on AMD we keep single-team kernels that have a
+loop trip count. The landscapes of the remaining kernels show large gains:
+sw4ck 2.2\x{} to 3.9\x{}, RSBench 3.06\x{}, miniWeather l760 2.96\x{}, S3D
+1.29\x{} to 2.23\x{}, SU3 1.90\x{}, SimpleMOC 1.29\x{}, and XSBench 1.11\x{},
+while HACCmk had nothing to gain.
+
+%=============================================================================
 \section{Discussion and recommendations}
 \label{sec:discussion}
 
@@ -2597,8 +2817,11 @@ has a low power limit and weak FP64 throughput, which affects both the
 bottleneck classes and the time-energy trade-off. Section~\ref{sec:replication}
 repeats Sections~\ref{sec:rl} to~\ref{sec:more} on a Quadro RTX 6000 of the same
 architecture, but the measurement, search-strategy, and energy results of the
-earlier sections were not replicated, and no GPU of another architecture was
-tested. Most sections use two proxy
+earlier sections were not replicated on it. Section~\ref{sec:amd} repeats the
+measurement validation, the classification, and the final-tuner comparison on
+an AMD MI50, where the classes changed; its thresholds were set on the 24
+LULESH and miniFE kernels and matched only as many HeCBench labels as the T4
+rules, so they are not yet validated beyond these applications. Most sections use two proxy
 applications with one recorded input each; Section~\ref{sec:hecbench} adds ten
 HeCBench applications and Section~\ref{sec:more} 114 more kernels, with inputs
 chosen to fit the timing range and a second input for six applications
@@ -2678,7 +2901,15 @@ Section~\ref{sec:replication} is kept outside the repository in
 \code{classify.py}, \code{offline.py}, \code{online.py}, \code{validate.py},
 \code{inputs.py}), the changes to the tuner (\code{rtx6000-port.patch} against
 commit \code{454c76f00}), the landscapes, classes, per-run results,
-validation rounds, logs, and a \code{REPORT.md} summary. Table~\ref{tab:env} lists the
+validation rounds, logs, and a \code{REPORT.md} summary. The AMD port of
+Section~\ref{sec:amd} is on branch \code{measurement-v3-amd}, with its build
+and run instructions in \code{record-replay/RR/BUILD\_AND\_RUN.md} and its
+design, measurements, and results in \code{record-replay/RR/AMD\_PORT\_PLAN.md}.
+Its experiment drivers (\code{calib/landscape.py} and \code{calib/analyze.py}
+for the classes, \code{phase5/validate\_measurement.py},
+\code{phase5/online.py}, and \code{phase5/validate\_shipped.py} for the
+measurement and the tuner comparison) and data are kept outside the
+repository. Table~\ref{tab:env} lists the
 environment variables that control the new behavior.
 
 \begin{table}[t]
@@ -2701,6 +2932,10 @@ Variable & Meaning (tuner default) \\
 \code{RR\_EXCLUSIVE\_WAIT\_SECONDS}, \code{RR\_CONTENDED\_RETRIES} & Exclusivity guard limits (3600, 5) \\
 \code{RR\_SATURATED\_SM\_PCT}, \code{RR\_SATURATED\_BUDGET} & Optional early stop for compute-saturated kernels (off, 15) \\
 \code{RR\_CLASSIFY\_SAMPLES} & Baseline samples for classification (3) \\
+\code{LIBOMPTARGET\_RR\_DEVMEM\_HEADROOM\_MB} & AMD: unused space at the top of a recording region (1024) \\
+\code{LIBOMPTARGET\_RR\_KEEP\_ASLR} & AMD: keep ASLR in the replay tool (off) \\
+\code{RR\_AMD\_PEAK\_DRAM\_GBS} & AMD: peak DRAM bandwidth for the throughput metric (1024) \\
+\code{HECBENCH\_ROOT} & HeCBench checkout used by the wrappers \\
 \bottomrule
 \end{tabular}
 \end{table}

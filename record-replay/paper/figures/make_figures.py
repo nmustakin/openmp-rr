@@ -485,9 +485,34 @@ def fig_hec():
     save(fig, 'hecbench')
 
 
+# ---------------------------------------------------------------- MI50 replication
+AMD = os.environ.get('RR_AMD_DATA', os.path.expanduser('~/rr-amd-work'))
+
+
+def fig_mi50_ramp():
+    fig, axes = plt.subplots(1, 2, figsize=(TWO, 2.0))
+    for ax, (name, title) in zip(axes, [('l1721', 'LULESH l1721 (4.2 ms)'),
+                                        ('lulesh-l2103', 'LULESH l2103 (0.42 ms)')]):
+        d = pd.read_csv(f'{AMD}/clock-ramp/{name}.csv')
+        d['ms'] = d.seconds * 1e3
+        for mode, color, label in [('cold', SLOT[0], 'Cold start (8 processes)'),
+                                   ('warm', SLOT[1], 'After 3 s warm-up (8 processes)')]:
+            for i, (_, g) in enumerate(d[d['mode'] == mode].groupby('process')):
+                ax.plot(g.launch, g.ms, color=color, lw=1.0, alpha=0.85,
+                        label=label if i == 0 else None)
+        ax.set_xlabel('Launch index within one replay process')
+        ax.set_title(title)
+        lo = d.ms.median()
+        ax.set_ylim(0.9 * lo, 1.35 * lo if name == 'l1721' else 2.4 * lo)
+    axes[0].set_ylabel('Kernel time (ms)')
+    axes[1].legend(loc='upper right')
+    save(fig, 'mi50_ramp')
+
+
 if __name__ == '__main__':
     for f in [fig_clock_ramp, fig_winners_curse, fig_measurement, fig_anytime, fig_time_energy,
-              fig_dram, fig_classes, fig_meta_effect, fig_cost, fig_initial, fig_avenues, fig_rl, fig_learned, fig_hec]:
+              fig_dram, fig_classes, fig_meta_effect, fig_cost, fig_initial, fig_avenues, fig_rl, fig_learned, fig_hec,
+              fig_mi50_ramp]:
         try:
             f()
         except Exception as e:
