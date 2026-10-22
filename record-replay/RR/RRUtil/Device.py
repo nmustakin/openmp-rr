@@ -322,6 +322,10 @@ class NVIDIA(metaclass=DeviceSingleton):
         # The replay region is mapped at the recorded address (mMap).
         return 4
 
+    def dropSingleTeams(self):
+        """Whether kernel discovery drops single-team launches (constructors)."""
+        return True
+
     def blockFits(self, regs, threads):
         """Whether a block of `threads` with `regs` registers per thread fits."""
         return regs * threads <= self.MaxRegBlock
@@ -736,6 +740,12 @@ class AMDGPU(metaclass=DeviceSingleton):
         # Without a fixed-address mapping the replay block must be large
         # enough to reach down to the recorded address.
         return self.getMaxMem()
+
+    def dropSingleTeams(self):
+        # Short loops (e.g. minisweep, 200-240 iterations) launch a single team
+        # of the default 256 threads; BaseBenchmark.execute keeps those with a
+        # recorded trip count instead.
+        return False
 
     def blockFits(self, vgprs, threads):
         """Whether one work-group of `threads` with `vgprs` VGPRs fits a CU:

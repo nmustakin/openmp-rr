@@ -1696,7 +1696,8 @@ class BaseBenchmark(ABC):
             csvFile=self.executable.replace('/', '_')
             print("Reading csvfile: ", csvFile)
             kernelDescr = self.Device.parse('kernel_activities.csv',
-                                            keepMaxTeam=True, dropSingleTeams=True)
+                                            keepMaxTeam=True,
+                                            dropSingleTeams=self.Device.dropSingleTeams())
 
         if not Record:
             kernels = dict()
@@ -1727,6 +1728,18 @@ class BaseBenchmark(ABC):
                 kname = info['Name']
                 recordedKernels.append(kname)
                 kname_to_hash[kname] = str(kernelInfo).replace('.json', '')
+
+        if not self.Device.dropSingleTeams():
+            # Keep single-team launches only if they are recorded loops: at
+            # AMD's default of 256 threads a loop of up to 256 iterations runs
+            # as one team, while constructors have no trip count.
+            def loop_trip_count(k):
+                if k not in kname_to_hash:
+                    return 0
+                with open(f'{kname_to_hash[k]}.json') as f:
+                    return json.load(f).get('LoopTripCount', 0)
+            kernelDescr = {k: v for k, v in kernelDescr.items()
+                           if v['Grid X'] > 1 or loop_trip_count(k) > 0}
 
         for k in kernelDescr.keys():
             toDeleteKernelList = [r for r in recordedKernels if r != k]
