@@ -305,6 +305,69 @@ applications, so HeCBench is the out-of-sample check.
 - The landscape winners replicate in the randomized rounds: l1721 4.63×,
   l844 4.33×, l1913 3.43×, l649 1.85×, l1029 1.76×, l2103 1.13×.
 
+### Phase 5.2: final-tuner comparison on MI50 (2026-10-21)
+
+**Setup.**
+- Recordings: the tuner's own LULESH and miniFE recordings.
+- Kernels: the 10 LULESH kernels of the paper's online studies plus all 7
+  miniFE kernels, 3 seeds each, on GPUs 0–5. Drivers are in
+  `~/rr-amd-work/phase5/`.
+- Strategies:
+  - `rank-confirm`: rank-batch, patience 2, batch confirmation, refinement,
+    300 s cap. The ranking model is trained on `pool.csv`: the calibration
+    landscapes, leaving the target kernel out, with classes from the first
+    MI50 rules.
+  - `tpe-batch`: 300 s cap.
+  - `adaptive`: 30 full evaluations, 8 initial; the paper used 60.
+- Compile tables are cached from the calibration, which is not counted in the
+  times below.
+- Ground truth: every shipped configuration re-measured with the baseline in
+  5 randomized rounds (`validate_shipped.py`, `truth/`).
+
+| Strategy | True speedup (geo-mean, 95% CI) | Share of attainable gain | End-to-end per kernel | vs tpe-batch |
+|---|---|---|---|---|
+| rank-confirm | 1.84× [1.46, 2.38] | 0.93 | 201 s | 1.032 [1.005, 1.065] |
+| tpe-batch | 1.78× [1.40, 2.32] | 0.87 | 436 s | — |
+| adaptive | 1.55× [1.24, 1.97] | 0.65 | 1381 s | 0.87 [0.81, 0.92] |
+
+**Findings.**
+- The final tuner transfers to MI50. It is about 2.2× faster than
+  tpe-batch, and its shipped configurations are better. On the T4 the two
+  tied.
+- Its advantage comes mostly from l649, l1029, l254 and l290.
+- `adaptive` with full evaluations is far slower here: every evaluation runs
+  four rocprof replay processes. Its 30-evaluation budget also falls well
+  short of the batch strategies.
+
+### Phase 5.3: HeCBench on MI50
+
+- **Built and recorded** all ten applications of the paper (51 kernels):
+  XSBench, RSBench, SimpleMOC, SU3, HACCmk, AMGmk, minisweep, sw4ck, S3D,
+  miniWeather.
+- **Filtered** (paper's rules) to **22 kernels**, the paper had 31 on the
+  T4:
+  - S3D's 13 hand-indexed teams regions have no trip count, as on the T4.
+  - 11 kernels run under 0.1 ms on MI50, 8 of them miniWeather.
+  - Minisweep's four kernels loop over 200–240 iterations, so at AMD's
+    default of 256 threads they launch one team. The tuner's kernel
+    discovery (`dropSingleTeams`) drops single-team kernels, so they were
+    never registered. Keeping them needs an AMD exception and a re-recording.
+- **Landscapes** of the 22 kernels (`~/rr-amd-work/hecbench/calib`) serve
+  as an out-of-sample check of the MI50 thresholds.
+  - The committed rules match 15 of 22 labels; the T4 rules also match 15.
+    15 of the 22 kernels are register-type, which the T4 rules'
+    everything-is-register happens to fit.
+  - In-sample (24 LULESH/miniFE kernels) the rules match 18 against 11.
+  - The spill test is the part that generalizes.
+  - The occupancy < 20% rule also flags S3D kernels that gain from runtime
+    parameters only.
+- **Gains:** sw4ck 2.2–3.9×, RSBench 3.06×, miniWeather l760 2.96×, S3D
+  1.29–2.23×, SU3 1.90×, SimpleMOC 1.29×, XSBench 1.11×. HACCmk has nothing
+  to gain.
+- Two S3D kernels (l189, l205) were redone because their final baseline
+  replay failed once. The calibration driver does not retry baselines; the
+  tuner's `Search` does.
+
 ### Remaining
 
 1. **Phase 5 measurement validation** (paper §4, Table `tab:measurement`):
