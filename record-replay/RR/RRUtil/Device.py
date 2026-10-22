@@ -734,7 +734,9 @@ class AMDGPU(metaclass=DeviceSingleton):
     def getRecordMem(self):
         # The heuristic region loses up to 2 GB to alignment and keeps 1 GB of
         # headroom (LIBOMPTARGET_RR_DEVMEM_HEADROOM_MB), so allocate more.
-        return 12
+        # RR_RECORD_MEM_GB lowers it, e.g. 4 GB (at least 1 GB usable) makes
+        # applications that need more device memory fail at recording.
+        return int(os.environ.get('RR_RECORD_MEM_GB', 12))
 
     def getReplayMem(self):
         # Without a fixed-address mapping the replay block must be large
