@@ -368,6 +368,59 @@ applications, so HeCBench is the out-of-sample check.
   replay failed once. The calibration driver does not retry baselines; the
   tuner's `Search` does.
 
+### HeCBench tuned as new applications, and input sensitivity (2026-10-22)
+
+**Minisweep.**
+- AMD kernel discovery now keeps single-team kernels that have a loop trip
+  count (`Device.dropSingleTeams`).
+- That registers minisweep's 4 kernels (1.55–2.23×), giving 26 HeCBench
+  kernels.
+
+**Online, as new applications** (`phase5/online-hec`, `truth-hec`).
+- The final tuner is trained on the other applications (pool of 50 kernels),
+  and batch TPE runs alongside, 3 seeds each.
+
+| Strategy | True speedup | Share of attainable gain | Time | vs tpe-batch |
+|---|---|---|---|---|
+| rank-confirm | 1.79× | 0.95 | 157 s | 1.001 [0.989, 1.014] |
+| tpe-batch | 1.79× | 0.96 | 380 s | — |
+
+- On the T4 the paper had 121 s vs 332 s, also with the same speedups.
+
+**Input sensitivity** (`~/rr-amd-work/inputs`).
+- Six second inputs. miniWeather 1600×800 is a separate build with
+  SIM_TIME=10.
+- 26 kernels with headroom; the T4 had 15.
+
+| At the second input | Transfer | Scaled | Retuned |
+|---|---|---|---|
+| Speedup | 1.37× | 1.13× | 1.54× |
+| Ratio to retuned | 0.89 [0.82, 0.95] | 0.73 [0.65, 0.83] | — |
+| Kernels slower than default | 4 | 11 | 0 |
+
+- On the T4 the speedups were 1.19× / 1.35× / 1.50×.
+- On MI50, rescaling the teams hurts: on S3D's smaller input and
+  miniWeather's larger grid.
+
+**Pool fix.**
+- `build_pool.py` mapped kernel names to applications over all recordings.
+  The second inputs reuse the names, so miniFE and SimpleMOC rows were
+  labelled with second-input applications. Leave-application-out then kept
+  them in training.
+- Affected runs were rerun and the old ones archived in
+  `~/rr-amd-work/leaky-pool`:
+  - SimpleMOC l379 rank-confirm (item 2); the result is unchanged at
+    1.269×.
+  - The MINIFE_NX150 and SIMPLEMOC_S1500K retunes.
+
+**Training-set size: blocked on disk.**
+- The bulk app ace recorded 41 GB; `execute/H_ACE` must be removed by the
+  user.
+- The bulk pipeline (`~/rr-amd-work/bulk/pipeline.sh`) now:
+  - records with a 4 GB region (`RR_RECORD_MEM_GB`);
+  - removes the files of kernels over 1 GB.
+- The offline harness is `bulk/training_size.py`.
+
 ### Remaining
 
 1. **Phase 5 measurement validation** (paper §4, Table `tab:measurement`):

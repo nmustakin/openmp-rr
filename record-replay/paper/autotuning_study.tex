@@ -96,7 +96,8 @@ as on the T4. The bottleneck classes did not carry over: five LULESH kernels
 gained 3.0\x{} to 4.6\x{} on the MI50 by removing the register spills of their
 default build, and the rules had to test for spills first. The final tuner
 shipped 3.2\% faster configurations than batch TPE on the MI50 in less than
-half its time (201~s against 436~s per kernel).
+half its time (201~s against 436~s per kernel), and on 26 HeCBench kernels
+tuned as new applications it matched batch TPE in about 40\% of its time.
 \end{abstract}
 
 \tableofcontents
@@ -2740,12 +2741,69 @@ and replayed on the MI50, with 51 recorded kernels. The 13 S3D teams regions
 without a trip count were excluded as on the T4, and 11 further kernels ran
 for less than 0.1~ms on the MI50, among them eight of the nine miniWeather
 kernels. The tuner's kernel discovery ignores kernels that launch a single team,
-and at AMD's default of 256 threads the minisweep loops of 200 to 240
-iterations launch one team, so on AMD we keep single-team kernels that have a
-loop trip count. The landscapes of the remaining kernels show large gains:
-sw4ck 2.2\x{} to 3.9\x{}, RSBench 3.06\x{}, miniWeather l760 2.96\x{}, S3D
-1.29\x{} to 2.23\x{}, SU3 1.90\x{}, SimpleMOC 1.29\x{}, and XSBench 1.11\x{},
-while HACCmk had nothing to gain.
+because such launches are usually constructors, but at AMD's default of 256
+threads per team the minisweep loops of 200 to 240 iterations also launch one
+team. On AMD the discovery therefore keeps single-team kernels that have a loop
+trip count, which added four minisweep kernels and left 26 kernels of ten
+applications. Their landscapes show large gains: sw4ck 2.2\x{} to 3.9\x{},
+RSBench 3.06\x{}, miniWeather l760 2.96\x{}, minisweep 1.55\x{} to 2.23\x{},
+S3D 1.29\x{} to 2.23\x{}, SU3 1.90\x{}, SimpleMOC 1.29\x{}, and XSBench
+1.11\x{}, while HACCmk had nothing to gain.
+
+We tuned the 26 kernels as new applications, with the final tuner trained on
+the landscapes of the other applications (50 kernels, never the kernel's own
+application) and with batch TPE, three seeds each, and validated the shipped
+configurations as before. The final tuner shipped the same speedups as batch
+TPE (1.79\x{} for both, ratio 1.001 [0.989, 1.014], with 0.95 and 0.96 of the
+attainable gain) in about 40\% of its time (157~s against 380~s per kernel),
+which matches the T4 result of Section~\ref{sec:hecval2} (121~s against
+332~s). Unlike on LULESH and miniFE (Section~\ref{sec:amd-tuner}), the final
+tuner did not ship faster configurations than batch TPE on these
+applications.
+
+\subsection{Input sensitivity}
+\label{sec:amd-inputs}
+We repeated the input study of Section~\ref{sec:inputs} with the same six
+second inputs. The miniWeather grid of $1600\times 800$ is a separate build,
+which we ran for 10 instead of 600 simulated seconds, because only the first
+launch of each kernel is recorded. On the MI50, 26 kernels of the six
+applications had an optimum above 1.05\x{} at the first input, against 15 on the
+T4. For each kernel and seed, we compared at the second input the configuration
+that the final tuner shipped at the first input (\emph{transfer}), the same
+configuration with the number of teams rescaled to keep the teams fraction
+(\emph{scaled}), and the final tuner run at the second input with the
+application left out of its training data (\emph{retuned}), all validated
+together against the baseline of the second input.
+
+\begin{table}[t]
+\centering
+\caption{Speedup at a second input on the MI50 (26 kernels of six applications; geometric means over kernels and seeds; the ratio to retuning with a bootstrap 95\% interval over kernels), with the T4 values of Table~\ref{tab:inputs}.}
+\label{tab:mi50inputs}
+\small
+\begin{tabular}{lrrr}
+\toprule
+& Transfer & Scaled & Retuned \\
+\midrule
+Speedup at the second input & 1.37 & 1.13 & 1.54 \\
+Ratio to retuned & 0.89 [0.82, 0.95] & 0.73 [0.65, 0.83] & -- \\
+Kernels worse than retuned by more than 2\% & 15 & 16 & -- \\
+Kernels slower than the default & 4 & 11 & 0 \\
+T4: speedup at the second input & 1.19 & 1.35 & 1.50 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:mi50inputs} shows that tuned configurations are input specific
+on the MI50 as well, but rescaling the teams hurt instead of helping. Unchanged
+configurations kept 0.89 of the retuned gain, against 0.79 on the T4, and lost
+the most on the miniFE vector kernels at the smaller input (0.64\x{} to
+0.77\x{} on l169, l205, and l210) and on minisweep l282 at 2.6 times the trip
+count (1.43\x{} instead of 2.86\x{}). Rescaled teams fixed minisweep l282
+(2.82\x{}) but made 11 kernels slower than the default, mostly S3D kernels at
+the eight times smaller input, where the rescaled launch has few teams (0.66\x{}
+on l215), and miniWeather l760 on the 16 times larger grid (0.65\x{}). Retuning
+at each input of interest therefore remains the recommendation, and a rule that
+rescales the teams has to be checked on each GPU.
 
 %=============================================================================
 \section{Discussion and recommendations}
