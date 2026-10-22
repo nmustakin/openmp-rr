@@ -133,7 +133,7 @@ METRIC_ROLES = {
 # nvidia: derived from the ten LULESH kernels on the T4.
 CLASS_THRESHOLDS = {
     'nvidia': dict(sm_saturated=80.0, compute_dram_max=70.0, locality_occ=80.0,
-                   locality_dram=70.0, register_occ=60.0),
+                   locality_dram=70.0, register_occ=60.0, register_spill=0.0),
 }
 # amd: calibrated on 24 MI50 kernels (17 LULESH, 7 miniFE) from exhaustive
 # batch landscapes; see AMD_PORT_PLAN.md. Spills of the default binary (64 VGPRs
@@ -141,9 +141,15 @@ CLASS_THRESHOLDS = {
 # they are tested before locality; locality kernels were the spill-free ones
 # above 45% DRAM throughput, and baseline occupancy (~37% almost everywhere)
 # does not separate them. No MI50 kernel was compute-saturated (VALU busy <=
-# 16%), so the compute rule keeps the T4 values and does not fire.
+# 16%), so the compute rule keeps the T4 values and does not fire. Spills of
+# 64 bytes or less are ignored (they came with gains below 1.1x).
+# Out of sample (20 HeCBench kernels) these rules match 13 landscape labels, as
+# many as the T4 rules: the spill test generalizes (9 of 9 kernels with large
+# spills gained 2.2-4.6x), low occupancy also marks kernels that gain from the
+# runtime parameters only.
 CLASS_THRESHOLDS['amd'] = dict(sm_saturated=80.0, compute_dram_max=70.0, locality_occ=0.0,
-                               locality_dram=45.0, register_occ=20.0, spill_first=True)
+                               locality_dram=45.0, register_occ=20.0, register_spill=64.0,
+                               spill_first=True)
 
 
 def thresholds():
@@ -270,6 +276,8 @@ def classify_bottleneck(metrics, sm_saturated=None):
     dram = metric(metrics, 'dram_util')
     occ = metric(metrics, 'occupancy')
     spill = metric(metrics, 'spill', 0) or 0
+    if spill <= th.get('register_spill', 0.0):
+        spill = 0
     if sm is None or dram is None or occ is None:
         return 'unknown'
     # Compute-saturated means the SM pipes are busy *and* memory is not: a
