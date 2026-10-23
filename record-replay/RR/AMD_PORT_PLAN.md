@@ -413,7 +413,33 @@ applications, so HeCBench is the out-of-sample check.
     1.269×.
   - The MINIFE_NX150 and SIMPLEMOC_S1500K retunes.
 
-**Training-set size: blocked on disk.**
+**Training-set size** (2026-10-23, `~/rr-amd-work/bulk`).
+
+Data:
+- 139 bulk HeCBench applications, recorded with a 4 GB region; large
+  recording files are deleted after their landscapes.
+- 235 kernels of 95 applications in the pool, 203 of them (76 applications)
+  with headroom; the T4 had 162 kernels, 101 with headroom.
+
+Offline harness (`training_size.py`, `summarize_ts.py`):
+
+| Share after 1/5/10 evaluations | All 203 kernels | 156 new kernels |
+|---|---|---|
+| rank LOAO (~230 training kernels) | .63/.80/.89 | .70/.85/.92 |
+| rank LOAO50 (original 50) | .35/.57/.80 | .33/.55/.80 |
+| TPE | .08/.45/.58 | .06/.45/.57 |
+
+- On new kernels after 5 evaluations: LOAO − LOAO50 = +0.30
+  [+0.24, +0.36], and LOAO − TPE = +0.40.
+- Unlike the T4, LOAO50 also beats TPE (+0.10).
+
+Pipeline fixes found on the way:
+- AMD parser: one row per kernel.
+- Landscape driver: a plain line number selects every kernel on that line.
+- Pipeline: no landscapes when the recording fails; stale checkpoints moved
+  aside before re-recording.
+
+**Earlier blocker (resolved by the per-application cleanup).**
 - The bulk app ace recorded 41 GB; `execute/H_ACE` must be removed by the
   user.
 - The bulk pipeline (`~/rr-amd-work/bulk/pipeline.sh`) now:

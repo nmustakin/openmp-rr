@@ -2805,6 +2805,59 @@ on l215), and miniWeather l760 on the 16 times larger grid (0.65\x{}). Retuning
 at each input of interest therefore remains the recommendation, and a rule that
 rescales the teams has to be checked on each GPU.
 
+\subsection{Training-set size}
+\label{sec:amd-more}
+We repeated the study of Section~\ref{sec:more} with the 139 bulk HeCBench
+applications that built for \code{gfx906} (one more needed input data that is
+not in the repository). We recorded them with a smaller recording region, so
+that applications needing more than the 1~GB limit failed at recording instead
+of filling the disk (one application recorded 41~GB, as on the T4), and kept the
+kernels with a loop trip count, a default time of 0.1~ms to 100~ms, and a
+recording of at most 1~GB. We excluded one application whose landscape
+configurations all failed to replay, and four kernels whose default launch lies
+outside the candidate space (landscape optima below 0.5\x{}), as in
+Section~\ref{sec:more}. Together with the 50 kernels of
+Sections~\ref{sec:amd-classes} and~\ref{sec:amd-hecbench}, the landscapes
+cover 235 kernels of 95 applications, of which 203 kernels of 76 applications
+have an optimum above 1.05\x{} (median 1.43\x{}, up to 7.8\x{}), against 101 of
+162 on the T4.
+
+We evaluated the ranking model offline on these landscapes as in
+Table~\ref{tab:more}, choosing one configuration at a time with the fine-tuning
+and acquisition of the final tuner, and TPE over the same configurations, with
+three seeds. The ranking model was trained on all other kernels (LOKO), on the
+kernels of the other applications (LOAO, about 230 kernels), or on the kernels
+of the other applications among the original 50 (LOAO50, the counterpart of
+LOAO48).
+
+\begin{table}[t]
+\centering
+\caption{Share of the optimum log speedup after 1, 5, and 10 evaluations on the MI50 landscapes (203 kernels with an optimum above 1.05\x{}, 156 of them from the bulk applications; the default configuration counts as known). LOAO50 trains on the original 50 kernels only.}
+\label{tab:mi50more}
+\small
+\begin{tabular}{lccc}
+\toprule
+Fold (kernels) & Ranking model & TPE & T4, ranking model \\
+\midrule
+LOKO (203) & .68/.82/.91 & .08/.45/.58 & .54/.69/.81 \\
+LOAO (203) & .63/.80/.89 & .08/.45/.58 & .38/.60/.76 \\
+LOAO, new kernels (156) & .70/.85/.92 & .06/.45/.57 & .42/.63/.77 \\
+LOAO50, new kernels (156) & .33/.55/.80 & .06/.45/.57 & .18/.27/.43 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:mi50more} shows that learned transfer gains from more training
+kernels on the MI50 as on the T4. On the new kernels, training on the other
+applications instead of the original 50 kernels raised the share of the optimum
+after five evaluations from 0.55 to 0.85 ($+0.299$ [$+0.239$, $+0.359$]) and
+after ten from 0.80 to 0.92 ($+0.120$ [$+0.081$, $+0.159$]), and the ranking
+model reached $+0.402$ [$+0.343$, $+0.461$] more of the optimum than TPE after five
+evaluations. Unlike on the T4, the ranking model trained on the original 50
+kernels was also better than TPE after five evaluations ($+0.103$ [$+0.041$,
+$+0.165$]). We did not repeat the regression model, RGPE, and GP-EI columns of
+Table~\ref{tab:more}.
+
 %=============================================================================
 \section{Discussion and recommendations}
 \label{sec:discussion}
