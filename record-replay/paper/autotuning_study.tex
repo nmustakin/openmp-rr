@@ -97,7 +97,11 @@ gained 3.0\x{} to 4.6\x{} on the MI50 by removing the register spills of their
 default build, and the rules had to test for spills first. The final tuner
 shipped 3.2\% faster configurations than batch TPE on the MI50 in less than
 half its time (201~s against 436~s per kernel), and on 26 HeCBench kernels
-tuned as new applications it matched batch TPE in about 40\% of its time.
+tuned as new applications it matched batch TPE in about 40\% of its time. On
+235 kernels of 95 applications, the ranking model trained on the other
+applications reached 0.85 of the optimum after five evaluations on a new
+application on the MI50, against 0.55 when trained on the original 50 kernels
+and 0.45 for TPE.
 \end{abstract}
 
 \tableofcontents
