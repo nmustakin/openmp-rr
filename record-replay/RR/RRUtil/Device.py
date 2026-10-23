@@ -592,6 +592,10 @@ class AMDGPU(metaclass=DeviceSingleton):
             idx = df.groupby(['Name'])['Grid X'].transform(max) != 1
             df = df[idx]
 
+        # A kernel launched with the same grid but different block sizes or
+        # register counts appears once per variant; keep the largest launch.
+        df = df.sort_values(['Grid X', 'Block X'], ascending=False)
+        df = df[~df.index.duplicated(keep='first')]
         return df.to_dict(orient='index')
 
     def _rocprofMetricsDir(self):
