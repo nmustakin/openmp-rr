@@ -113,6 +113,12 @@ The tuner selects the GPU with `ROCR_VISIBLE_DEVICES`.
     size.
   - A replay that cannot place the region at the recorded address aborts.
     This happens with recordings made with ASLR on.
+  - **Make exactly one GPU visible per replay process**, as during recording
+    (for example `ROCR_VISIBLE_DEVICES=0`). With all 8 MI50s visible, the
+    device address layout changes and the replay region no longer reaches the
+    recorded address. For multi-GPU searches (`options['devices']`), make
+    exactly the GPUs used visible; the forked workers restrict themselves to
+    one each.
 - **Timing.**
   - Timing replays use HSA dispatch timestamps.
   - The timing warm-up defaults to 100 ms, because the MI50 has no
