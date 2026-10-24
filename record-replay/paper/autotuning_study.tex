@@ -2880,31 +2880,38 @@ LOAO48).
 
 \begin{table}[t]
 \centering
-\caption{Share of the optimum log speedup after 1, 5, and 10 evaluations on the MI50 landscapes (203 kernels with an optimum above 1.05\x{}, 156 of them from the bulk applications; the default configuration counts as known). LOAO50 trains on the original 50 kernels only.}
+\caption{Share of the optimum log speedup after 1, 5, and 10 evaluations on the MI50 landscapes (203 kernels with an optimum above 1.05\x{}, 156 of them from the bulk applications; the default configuration counts as known), with the ranking-model column of Table~\ref{tab:more} for the T4. LOAO50 trains on the original 50 kernels only. RGPE uses the ranking model for its first five evaluations, as in the tuner.}
 \label{tab:mi50more}
 \small
-\begin{tabular}{lccc}
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{lcccccc}
 \toprule
-Fold (kernels) & Ranking model & TPE & T4, ranking model \\
+Fold (kernels) & Ranking model & Regression model & RGPE & GP-EI & TPE & T4 ranking \\
 \midrule
-LOKO (203) & .68/.82/.91 & .08/.45/.58 & .54/.69/.81 \\
-LOAO (203) & .63/.80/.89 & .08/.45/.58 & .38/.60/.76 \\
-LOAO, new kernels (156) & .70/.85/.92 & .06/.45/.57 & .42/.63/.77 \\
-LOAO50, new kernels (156) & .33/.55/.80 & .06/.45/.57 & .18/.27/.43 \\
+LOKO (203) & .68/.82/.91 & .66/.80/.86 & .68/.82/.92 & .13/.55/.75 & .08/.45/.58 & .54/.69/.81 \\
+LOAO (203) & .63/.80/.89 & .50/.69/.75 & .63/.80/.90 & .13/.55/.75 & .08/.45/.58 & .38/.60/.76 \\
+LOAO, new kernels (156) & .70/.85/.92 & .57/.74/.80 & .70/.85/.93 & .12/.54/.74 & .06/.45/.57 & .42/.63/.77 \\
+LOAO50, new kernels (156) & .33/.55/.80 & .46/.67/.75 & .33/.55/.81 & .12/.54/.74 & .06/.45/.57 & .18/.27/.43 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 Table~\ref{tab:mi50more} shows that learned transfer gains from more training
 kernels on the MI50 as on the T4. On the new kernels, training on the other
-applications instead of the original 50 kernels raised the share of the optimum
-after five evaluations from 0.55 to 0.85 ($+0.299$ [$+0.239$, $+0.359$]) and
-after ten from 0.80 to 0.92 ($+0.120$ [$+0.081$, $+0.159$]), and the ranking
-model reached $+0.402$ [$+0.343$, $+0.461$] more of the optimum than TPE after five
-evaluations. Unlike on the T4, the ranking model trained on the original 50
-kernels was also better than TPE after five evaluations ($+0.103$ [$+0.041$,
-$+0.165$]). We did not repeat the regression model, RGPE, and GP-EI columns of
-Table~\ref{tab:more}.
+applications instead of the original 50 kernels raised the ranking model's
+share of the optimum after five evaluations from 0.55 to 0.85 ($+0.299$
+[$+0.239$, $+0.359$]) and after ten from 0.80 to 0.92 ($+0.120$ [$+0.081$,
+$+0.159$]), while the regression model gained less ($+0.073$ [$+0.008$,
+$+0.141$] after five), as on the T4. With the larger training set, the ranking
+model was better than the regression model after five and ten evaluations
+($+0.104$ [$+0.063$, $+0.148$] and $+0.113$ [$+0.074$, $+0.156$]), than GP-EI
+after five ($+0.306$ [$+0.251$, $+0.360$]), and than TPE ($+0.402$ [$+0.343$,
+$+0.461$]). RGPE equals the ranking model for the first five evaluations and
+added at most 0.01 afterwards. Unlike on the T4, the ranking model trained on
+the original 50 kernels was also better than TPE after five evaluations
+($+0.103$ [$+0.041$, $+0.165$]), although with that training set the regression
+model was better than it after one and five evaluations (0.46 and 0.67 against
+0.33 and 0.55), as on the T4.
 
 %=============================================================================
 \section{Discussion and recommendations}
