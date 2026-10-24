@@ -35,6 +35,10 @@ class Kernel:
     # Devices may lower the default (Device.TimingWarmupMs, set per Kernel).
     TimingWarmupMs = int(os.environ.get('RR_TIMING_WARMUP_MS', 1000))
     TimingRepeats = int(os.environ.get('RR_TIMING_REPEATS', 10))
+    # RR_SKIP_METRICS=1: full evaluations time the configuration without the
+    # metrics replay (four profiled processes on AMD), for strategies that do
+    # not use metrics.
+    SkipMetrics = os.environ.get('RR_SKIP_METRICS', '0') == '1'
     EnergyMinMs = int(os.environ.get('RR_ENERGY_MIN_MS', 300))
     BaselineEvery = int(os.environ.get('RR_BASELINE_EVERY', 20))
     ExclusiveWaitSeconds = int(os.environ.get('RR_EXCLUSIVE_WAIT_SECONDS', 3600))
@@ -1254,7 +1258,7 @@ class Kernel:
         DStats = list()
         res, durations, energies, GLoads, GStores = self.execute(
             NumThreads, NumTeams, device_handle=device_handle, maxIters=Tries,
-            metrics=not screen, energy=not screen)
+            metrics=not screen and not Kernel.SkipMetrics, energy=not screen)
         if len(res) == 0:
             return False, None, None, None, None, None, None
         # The profiled binary's compile-time spills (registers spilled to
