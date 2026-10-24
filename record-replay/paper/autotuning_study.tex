@@ -2738,6 +2738,50 @@ adaptive pipeline with full evaluations was slower and reached less of the
 attainable gain, because a profiled evaluation costs about 30~s on the MI50 and
 its 30 evaluations did not reach the large gains of the spilling kernels.
 
+\subsection{Several GPUs}
+\label{sec:amd-gpus}
+Section~\ref{sec:confirm} found that four T4 GPUs shortened the final tuner's
+end-to-end time only through the measurements before the search. We ran the
+final tuner on the five kernels of that comparison (LULESH l649, l844, l1201
+and miniFE l290, l521) with 1, 2, 4, and 8 MI50 GPUs, three seeds each, one run
+at a time in a shuffled order of GPU counts, and validated the shipped
+configurations together in five randomized rounds. An AMD replay process must
+see exactly one GPU, because with all eight GPUs visible the device address
+layout changes and the replay region no longer reaches the recorded address,
+so each run made exactly its GPUs visible and each worker process one of them.
+
+\begin{table}[t]
+\centering
+\caption{Final tuner with 1, 2, 4, and 8 MI50 GPUs (five kernels, three seeds). Times are means per run; before the search means the baseline measurement, the classification profiles, and model training. The true speedup is the geometric mean over kernels, with the ratio to one GPU and its kernel-clustered bootstrap 95\% interval.}
+\label{tab:mi50gpus}
+\small
+\begin{tabular}{rrrrrrr}
+\toprule
+GPUs & End to end & Before search & Screening & Confirmation & True speedup & Ratio to 1 GPU \\
+\midrule
+1 & 227~s & 97~s & 114~s & 16~s & 1.858 & 1 \\
+2 & 280~s & 169~s & 98~s & 13~s & 1.851 & 0.996 [0.991, 1.000] \\
+4 & 202~s & 89~s & 102~s & 12~s & 1.849 & 0.995 [0.989, 0.999] \\
+8 & 188~s & 89~s & 87~s & 12~s & 1.845 & 0.993 [0.983, 0.998] \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:mi50gpus} shows that more GPUs shortened the search little.
+Eight GPUs reduced the end-to-end time by 17\% and the screening by 24\%,
+because each batch of 16 configurations gives every GPU only two to eight
+configurations, while every replay process still loads the recording and warms
+up the GPU, and the timings of each GPU are calibrated against the first one.
+Two GPUs were slower than one, because the multi-GPU path takes the three
+classification profiles in parallel on up to three GPUs and, with two GPUs,
+takes the third alone, whereas the single-GPU path stops after one profile when
+the kernel is clearly classified; a full profile takes about 70~s on the MI50.
+The shipped configurations lost less than 1\% with more GPUs (0.993 with eight),
+because screens timed on different GPUs are mapped to the first GPU with a
+calibration factor, which adds noise to their ranking. As on the T4, several
+GPUs are more useful for tuning several kernels at the same time than for
+shortening the search for one kernel.
+
 \subsection{HeCBench}
 \label{sec:amd-hecbench}
 All ten HeCBench applications of Section~\ref{sec:hecbench} built, recorded,

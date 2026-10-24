@@ -447,6 +447,25 @@ Pipeline fixes found on the way:
   - removes the files of kernels over 1 GB.
 - The offline harness is `bulk/training_size.py`.
 
+### Final tuner with 1, 2, 4, 8 GPUs (2026-10-24, `phase5/mgpu`)
+
+Setup: 5 kernels (l649, l844, l1201, miniFE l290, l521), 3 seeds, one run at
+a time, validated in 5 rounds.
+
+| GPUs | End to end | Before search | Screening | Confirm | True speedup |
+|---|---|---|---|---|---|
+| 1 | 227 s | 97 s | 114 s | 16 s | 1.858 |
+| 2 | 280 s | 169 s | 98 s | 13 s | 1.851 |
+| 4 | 202 s | 89 s | 102 s | 12 s | 1.849 |
+| 8 | 188 s | 89 s | 87 s | 12 s | 1.845 |
+
+- 8 GPUs save only 17% end to end, because per-process fixed costs dominate.
+- 2 GPUs are slower: with 2 GPUs the multi-GPU path takes its third
+  classification profile alone. The single-GPU path stops after one clear
+  profile.
+- Quality drops < 1% with 8 GPUs (cross-GPU timing calibration noise).
+- AMD replays need exactly one visible GPU.
+
 ### Remaining
 
 1. **Phase 5 measurement validation** (paper §4, Table `tab:measurement`):
