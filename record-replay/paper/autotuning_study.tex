@@ -95,8 +95,9 @@ and the v3 measurement reduced the cross-process variation from 9.3\% to 0.30\%
 as on the T4. The bottleneck classes did not carry over: five LULESH kernels
 gained 3.0\x{} to 4.6\x{} on the MI50 by removing the register spills of their
 default build, and the rules had to test for spills first. The final tuner
-shipped 3.2\% faster configurations than batch TPE on the MI50 in less than
-half its time (201~s against 436~s per kernel), and on 26 HeCBench kernels
+needed less than half the time of batch TPE on the MI50 (201~s against 436~s per
+kernel); it tied batch TPE on the five kernels of the T4 comparison and shipped
+3.2\% faster configurations on all 17 LULESH and miniFE kernels, and on 26 HeCBench kernels
 tuned as new applications it matched batch TPE in about 40\% of its time. On
 235 kernels of 95 applications, the ranking model trained on the other
 applications reached 0.85 of the optimum after five evaluations on a new
@@ -2768,24 +2769,29 @@ the baseline in five randomized rounds, as before.
 
 \begin{table}[t]
 \centering
-\caption{Final tuner, batch TPE, and the adaptive pipeline on the MI50 (17 LULESH and miniFE kernels, three seeds). True speedups are geometric means over kernels with a kernel-clustered bootstrap 95\% interval; times are means per run, end to end, with compile tables computed beforehand.}
+\caption{Final tuner, batch TPE, and the adaptive pipeline on the MI50 (17 LULESH and miniFE kernels, three seeds). True speedups are geometric means over kernels and seeds, and the ratio to batch TPE has a kernel-clustered bootstrap 95\% interval; times are means per run, end to end, with compile tables computed beforehand.}
 \label{tab:mi50tuner}
 \small
 \begin{tabular}{lrrrr}
 \toprule
 Strategy & True speedup & Share of attainable gain & End to end & Ratio to batch TPE \\
 \midrule
-Final tuner (\code{rank-confirm}) & 1.84 [1.46, 2.38] & 0.93 & 201~s & 1.032 [1.005, 1.065] \\
-Batch TPE (\code{tpe-batch}) & 1.78 [1.40, 2.32] & 0.87 & 436~s & -- \\
-Adaptive, 30 full evaluations & 1.55 [1.24, 1.97] & 0.65 & 1381~s & 0.87 [0.81, 0.92] \\
+Final tuner (\code{rank-confirm}) & 1.84 & 0.93 & 201~s & 1.032 [1.005, 1.065] \\
+Batch TPE (\code{tpe-batch}) & 1.78 & 0.87 & 436~s & -- \\
+Adaptive, 30 full evaluations & 1.55 & 0.65 & 1381~s & 0.87 [0.81, 0.92] \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 Table~\ref{tab:mi50tuner} shows that the final tuner carries over to the MI50.
-It needed less than half the time of batch TPE and shipped configurations that
-were 3.2\% faster, with an interval that excludes no gain, whereas the two tied
-on the T4. Most of its advantage came from l649, l1029, l254, and l290. The
+It needed less than half the time of batch TPE on all 17 kernels and shipped
+configurations that were 3.2\% faster, with an interval that excludes no gain;
+most of the advantage came from l649, l1029, l254, and l290. The T4 comparison
+of Section~\ref{sec:confirm} used five of these kernels (LULESH l649, l844,
+l1201 and miniFE l290, l521), and on these five the two strategies tied on the
+MI50 as well (ratio 1.057 [0.993, 1.132], 242~s against 490~s), so the
+significant difference on the MI50 comes from the larger kernel set rather than
+from a different behavior of the tuner. The
 adaptive pipeline with full evaluations was slower and reached less of the
 attainable gain, because a profiled evaluation costs about 30~s on the MI50 and
 its 30 evaluations did not reach the large gains of the spilling kernels.

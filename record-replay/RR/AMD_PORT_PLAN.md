@@ -326,14 +326,19 @@ applications, so HeCBench is the out-of-sample check.
 
 | Strategy | True speedup (geo-mean, 95% CI) | Share of attainable gain | End-to-end per kernel | vs tpe-batch |
 |---|---|---|---|---|
-| rank-confirm | 1.84× [1.46, 2.38] | 0.93 | 201 s | 1.032 [1.005, 1.065] |
-| tpe-batch | 1.78× [1.40, 2.32] | 0.87 | 436 s | — |
-| adaptive | 1.55× [1.24, 1.97] | 0.65 | 1381 s | 0.87 [0.81, 0.92] |
+| rank-confirm | 1.84× | 0.93 | 201 s | 1.032 [1.005, 1.065] |
+| tpe-batch | 1.78× | 0.87 | 436 s | — |
+| adaptive | 1.55× | 0.65 | 1381 s | 0.87 [0.81, 0.92] |
+
+True speedups are geometric means; only ratios carry CIs.
 
 **Findings.**
 - The final tuner transfers to MI50. It is about 2.2× faster than
-  tpe-batch, and its shipped configurations are better. On the T4 the two
-  tied.
+  tpe-batch, and on all 17 kernels its shipped configurations are better.
+- On the T4's five-kernel set (l649, l844, l1201, miniFE l290, l521) the two
+  tie on MI50 too: ratio 1.057 [0.993, 1.132], 242 s vs 490 s. The
+  significant edge comes from the larger kernel set, not from a different
+  tuner behavior.
 - Its advantage comes mostly from l649, l1029, l254 and l290.
 - `adaptive` with full evaluations is far slower here: every evaluation runs
   four rocprof replay processes. Its 30-evaluation budget also falls well

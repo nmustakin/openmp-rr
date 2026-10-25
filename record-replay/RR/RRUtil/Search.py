@@ -143,10 +143,11 @@ CLASS_THRESHOLDS = {
 # does not separate them. No MI50 kernel was compute-saturated (VALU busy <=
 # 16%), so the compute rule keeps the T4 values and does not fire. Spills of
 # 64 bytes or less are ignored (they came with gains below 1.1x).
-# Out of sample (20 HeCBench kernels) these rules match 13 landscape labels, as
-# many as the T4 rules: the spill test generalizes (9 of 9 kernels with large
-# spills gained 2.2-4.6x), low occupancy also marks kernels that gain from the
-# runtime parameters only.
+# Out of sample (22 HeCBench kernels) these rules match 15 landscape labels, as
+# many as the T4 rules, because 15 of the 22 kernels are register bound; in
+# sample (24 kernels) they match 18 against 11. The spill test generalizes (9 of
+# 9 kernels with large spills gained 2.2-4.6x); low occupancy also marks
+# kernels that gain from the runtime parameters only.
 CLASS_THRESHOLDS['amd'] = dict(sm_saturated=80.0, compute_dram_max=70.0, locality_occ=0.0,
                                locality_dram=45.0, register_occ=20.0, register_spill=64.0,
                                spill_first=True)
