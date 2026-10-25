@@ -466,6 +466,34 @@ a time, validated in 5 rounds.
 - Quality drops < 1% with 8 GPUs (cross-GPU timing calibration noise).
 - AMD replays need exactly one visible GPU.
 
+### Search strategies and energy (paper §5) on MI50 (2026-10-25, `phase5/strategies`)
+
+Setup: 10 LULESH kernels, 3 seeds, 60 proposals (15 initial), shared cache
+per kernel, two timing processes per configuration, no metrics replay
+(`RR_SKIP_METRICS=1`), validated in 5 rounds.
+
+| Strategy | True speedup | vs bo-speedup |
+|---|---|---|
+| tpe-speedup | 2.352 | 1.034 [0.998, 1.078] |
+| motpe | 2.308 | 1.015 |
+| bo-speedup | 2.275 | 1 |
+| random | 2.235 | 0.982 [0.950, 1.023] |
+| bo-energy | 2.195 | 1.002 without l1201 |
+
+- l1201's energy is not physical (about 2100 W implied): the reduction's
+  back-to-back energy launches run on modified inputs. It is excluded from
+  the energy analysis.
+- Over 9 kernels: shipping the fastest configuration leaves 3.6% of the
+  energy gain; shipping the most efficient costs 4.7% in speed.
+- Hypervolume: bo-energy 0.795, motpe 0.788, tpe 0.749, bo-speedup 0.720,
+  random 0.691.
+- One worker deadlocked inside Python (idle, no children) for about 10 h and
+  was restarted. The cause is unknown.
+
+**Training-set extension:** regression model, RGPE, GP-EI
+(`bulk/training_size2.py`). After 5 evaluations on new kernels, the ranking
+model beats regression by +0.10, and RGPE is about equal to the ranking model.
+
 ### Remaining
 
 1. **Phase 5 measurement validation** (paper §4, Table `tab:measurement`):

@@ -2662,6 +2662,58 @@ Wall time per replay process & 2.9~s & 3.4~s & 2.9~s $\to$ 4.3~s \\
 \end{tabular}
 \end{table}
 
+\subsection{Search strategies, time, and energy}
+\label{sec:amd-search}
+We repeated the comparison of Section~\ref{sec:search} on the ten LULESH
+kernels with \code{bo-speedup}, \code{tpe-speedup}, random search,
+\code{bo-energy}, and MOTPE, three seeds, 60 proposals with 15 initial samples,
+and a measurement cache shared by the runs of each kernel. Each configuration
+was measured with two v3 timing processes; we left out the metrics replay,
+which these strategies do not use and which takes four profiled replay
+processes on the MI50. The shipped configurations were validated with the
+baseline in five randomized rounds.
+
+\begin{table}[t]
+\centering
+\caption{Search strategies on ten LULESH kernels on the MI50 (three seeds, 60 proposals), as in Table~\ref{tab:search}. The ratio of \code{bo-energy} excludes l1201, whose energy measurement is not valid (see text); with l1201 it is 0.965 [0.883, 1.036].}
+\label{tab:mi50search}
+\begin{tabular}{lrrr}
+\toprule
+Strategy & True speedup & Ratio to \code{bo-speedup} (95\% CI) & Share at 30 / 60 \\
+\midrule
+\code{bo-speedup} & 2.275 & 1 (reference) & 0.73 / 0.84 \\
+\code{tpe-speedup} & 2.352 & 1.034 [0.998, 1.078] & 0.78 / 0.90 \\
+\code{motpe} & 2.308 & 1.015 [0.995, 1.042] & 0.77 / 0.86 \\
+random & 2.235 & 0.982 [0.950, 1.023] & 0.54 / 0.81 \\
+\code{bo-energy} & 2.195 & 1.002 [0.966, 1.051] & 0.71 / 0.86 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:mi50search} shows the result of Section~\ref{sec:search} again:
+BO, TPE, and MOTPE ship statistically indistinguishable configurations, and TPE
+finds good configurations earlier than BO. Random search reached only 0.54 of
+the best known log speedup after 30 proposals, against 0.73 to 0.78 for the
+model-based strategies, but its final gap of 1.8\% was not significant on the
+MI50, where the large gains of the spilling kernels are easy to find.
+
+The energy measurement of l1201 is not valid. Its energy per launch implies a
+power of about 2100~W (median over configurations), against 127~W to 178~W on
+every other kernel and a board limit of 300~W, because the back-to-back launches
+of the energy window run on inputs that the previous launches of this reduction
+have modified and take far longer than the timed launches. We therefore
+excluded l1201 from the energy results. On the other nine kernels, the
+time-optimal and energy-optimal configurations differed on eight. Shipping the
+fastest configuration left 3.6\% of the attainable energy gain unclaimed
+(geometric mean), and shipping the most energy-efficient one cost 4.7\% in
+speed, against 7.6\% and 7.4\% on the T4. The largest trade-offs were on l1721
+(the fastest configuration at 4.77\x{} with a 4.00\x{} energy gain, the most
+efficient at 4.23\x{} with 4.31\x{}) and l649 (1.80\x{} with 1.99\x{} against
+1.74\x{} with 2.17\x{}). Relative to the union of all configurations found,
+\code{bo-energy} reached a hypervolume of 0.795, MOTPE 0.788, TPE 0.749,
+\code{bo-speedup} 0.720, and random search 0.691, so energy-aware search again
+found the trade-offs best without losing speed.
+
 \subsection{Bottleneck classes on the MI50}
 \label{sec:amd-classes}
 To recalibrate the classes, we measured, for each of the 24 LULESH and miniFE
@@ -2984,10 +3036,14 @@ bottleneck classes and the time-energy trade-off. Section~\ref{sec:replication}
 repeats Sections~\ref{sec:rl} to~\ref{sec:more} on a Quadro RTX 6000 of the same
 architecture, but the measurement, search-strategy, and energy results of the
 earlier sections were not replicated on it. Section~\ref{sec:amd} repeats the
-measurement validation, the classification, and the final-tuner comparison on
-an AMD MI50, where the classes changed; its thresholds were set on the 24
-LULESH and miniFE kernels and matched only as many HeCBench labels as the T4
-rules, so they are not yet validated beyond these applications. Most sections use two proxy
+measurement validation, the search-strategy and energy comparison, the
+classification, the final tuner, HeCBench, the input study, and the
+training-set study on an AMD MI50, where the classes changed; its thresholds
+were set on the 24 LULESH and miniFE kernels and matched only as many HeCBench
+labels as the T4 rules, so they are not yet validated beyond these
+applications. The kernel energy of a kernel that modifies its own inputs can be
+wrong, because the back-to-back launches of the energy window run on modified
+inputs; on the MI50 this made the energy of LULESH l1201 unusable. Most sections use two proxy
 applications with one recorded input each; Section~\ref{sec:hecbench} adds ten
 HeCBench applications and Section~\ref{sec:more} 114 more kernels, with inputs
 chosen to fit the timing range and a second input for six applications
