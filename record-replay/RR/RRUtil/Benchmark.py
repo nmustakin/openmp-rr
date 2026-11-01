@@ -617,6 +617,12 @@ class Kernel:
                                    classification_margin,
                                    config_to_point)
         options = dict(options or {})
+        # Ablation of the classification (options['no_classify']): the baseline is
+        # measured without the profiled metrics replay, the kernel gets no class, and
+        # the transfer pool's classes are blanked, so the models see no class features.
+        no_classify = bool(options.pop('no_classify', False))
+        if no_classify and options.get('pool') is not None:
+            options['pool'] = options['pool'].assign(klass='none')
         pBounds = self.getBounds(**kwargs)
         db = DB(self.getDBName(**kwargs), self.getDefaultKey())
         db.setMeasurementSchema(self.MeasurementSchema)
@@ -646,8 +652,14 @@ class Kernel:
             rank_job['thread'] = threading.Thread(target=_train, daemon=True)
             rank_job['thread'].start()
         devices = list(options.get('devices') or [0])
-        classifying = algorithm in ('adaptive', 'tpe-portfolio', 'trees-prior', 'transfer-model',
-                                    'combined', 'combined-batch', 'rank-batch', 'rank-rgpe-batch')
+        # options['class_budget'] (batch strategies without a trained model, e.g. tpe-batch):
+        # classify the baseline and give a compute-saturated kernel only
+        # options['saturated_batches'] batches (default 1), as the adaptive tuner cuts
+        # its budget for such kernels.
+        class_budget = bool(options.pop('class_budget', False))
+        classifying = (algorithm in ('adaptive', 'tpe-portfolio', 'trees-prior', 'transfer-model',
+                                     'combined', 'combined-batch', 'rank-batch',
+                                     'rank-rgpe-batch') or class_budget) and not no_classify
         if self.getDefaultKey() not in db and len(devices) > 1 and classifying:
             # Measure the default and its extra classification samples on several
             # GPUs at once. Only device 0's timings enter the baseline; the other
@@ -670,7 +682,12 @@ class Kernel:
             # (a transient failure left an invalid baseline that later samples cannot
             # repair) and stop rather than search against no baseline.
             for attempt in range(3):
-                Valid, SStats, DStats, Duration, Energy, GLoads, GStores = measure({})
+                skip_metrics = Kernel.SkipMetrics
+                Kernel.SkipMetrics = skip_metrics or no_classify
+                try:
+                    Valid, SStats, DStats, Duration, Energy, GLoads, GStores = measure({})
+                finally:
+                    Kernel.SkipMetrics = skip_metrics
                 if Valid:
                     break
                 print(f'Baseline measurement failed (attempt {attempt + 1} of 3)', flush=True)
@@ -713,6 +730,15 @@ class Kernel:
             names = set().union(*[m.keys() for m in samples])
             median = {n: float(np.median([m[n] for m in samples if n in m])) for n in names}
             klass = classify_bottleneck(median, self.SaturatedSMPct or None)
+        elif no_classify and db.Data[self.getDefaultKey()].get('classify_profiles') is None:
+            # The same timing-only baseline samples as a clearly classified kernel,
+            # without its profile.
+            for _ in range(self.ClassifySamples - 1):
+                BValid, _, _, BDuration, BEnergy, _, _ = self.sample(Tries=1, Screen=True)
+                if BValid:
+                    db.AddSamples(self.getDefaultKey(), BDuration, BEnergy)
+            db.Data[self.getDefaultKey()]['classify_profiles'] = 0
+            db.Update()
 
         strategy, target, fidelity = algorithm, 'objective', 'full'
         pool = options.pop('pool', None)
@@ -732,6 +758,10 @@ class Kernel:
             # per replay process (Kernel.sample_batch), grouped by binary.
             strategy, fidelity = 'tpe', 'batch'
             options['constant_liar'] = True
+            if class_budget and klass == 'compute':
+                options['max_batches'] = options.get('saturated_batches', 1)
+                print(f'Class budget: kernel classified {klass}; '
+                      f'{options["max_batches"]} batch(es)', flush=True)
         elif algorithm == 'tpe-portfolio':
             strategy = 'tpe'
             options['initial_points'] = build_portfolio(
@@ -948,6 +978,9 @@ class Kernel:
                     stop_reason = 'converged'
                     break
                 batch_best.append(max([t['speedup'] for t in trace] or [0]))
+                if options.get('max_batches') and len(batch_best) >= options['max_batches']:
+                    stop_reason = 'class-budget'
+                    break
                 if (patience and len(batch_best) > patience
                         and batch_best[-1] <= batch_best[-1 - patience] * (1 + patience_tol)
                         and not getattr(searcher, 'initial', None)):

@@ -307,12 +307,12 @@ def fig_cost():
              ('Timing process 2: start-up and load', floor, SLOT[0]),
              ('Timing process 2: warm-up, 10 launches, energy', warm + energy, SLOT[2]),
              ('Metrics replay (warm, all counters)', metrics, SLOT[1])]
-    fig, ax = plt.subplots(figsize=(TWO, 1.25))
+    fig, ax = plt.subplots(figsize=(TWO, 0.625))
     left = 0
     for name, val, col in parts:
         ax.barh(0, val, left=left, color=col, height=0.5, edgecolor=SURF, linewidth=1.5)
         if val > 0.9:
-            ax.text(left + val / 2, 0, f'{val:.1f}s', ha='center', va='center', fontsize=6.5, color='white')
+            ax.text(left + val / 2, 0, f'{val:.1f}s', ha='center', va='center', fontsize=6.5, color='white', fontweight='bold')
         left += val
     ax.set_xlim(0, left + 0.2)
     ax.set_yticks([]); ax.grid(axis='y', visible=False)
@@ -323,7 +323,7 @@ def fig_cost():
               SLOT[2]: 'Timing process: 1 s warm-up, 10 timed launches, energy window',
               SLOT[1]: 'Metrics replay (warm-up and all counters)'}
     ax.legend(handles=[Patch(color=c_, label=l) for c_, l in labels.items()], loc='upper center',
-              bbox_to_anchor=(0.5, -0.7), ncol=2, columnspacing=1.2)
+              bbox_to_anchor=(0.5, -0.75), ncol=2, columnspacing=1.2)
     ax.spines['left'].set_visible(False)
     save(fig, 'cost_breakdown')
 
@@ -463,17 +463,22 @@ def fig_learned():
 # ---------------------------------------------------------------- 14. HeCBench online
 def fig_hec():
     H = f'{X}/hecbench-2026-10-13'
-    r = pd.read_csv(f'{H}/online3/shipped3.csv')
-    t = r.groupby(['kernel', 'method']).speedup.apply(gmean).unstack('method')
-    t['opt'] = r.groupby('kernel').landscape_opt.first()
+    # online3 runs and the final tuner with wave-aligned team counts (tuner-fixes-2026-10-30),
+    # all re-measured with the default in the same rounds (joint-validation-2026-10-31)
+    r = pd.read_csv(f'{X}/joint-validation-2026-10-31/shipped.csv')
+    t = r.groupby(['kernel', 'method']).speedup.apply(gmean).unstack('method').rename(columns={'final-wave': 'wave'})
+    # best configuration in the grid datasets themselves (SimpleMOC l379 re-measured 2026-10-29)
+    t['opt'] = [max(pd.read_csv(f).speedup.max() for f in glob.glob(f'{H}/landscape/{k}-*.csv'))
+                for k in t.index]
     t = t.sort_values('tpe-batch', ascending=False)
     fig, ax = plt.subplots(figsize=(TWO, 2.2))
-    x = np.arange(len(t)); w = 0.27
-    for i, (m, label) in enumerate([('rank-confirm-refine', 'Final tuner (with refinement)'),
-                                    ('rank-confirm-fast', 'Without refinement'),
+    x = np.arange(len(t)); w = 0.2
+    for i, (m, label) in enumerate([('wave', 'Final tuner + wave-aligned counts'),
+                                    ('rank-confirm-refine', 'Final tuner'),
+                                    ('rank-confirm-fast', 'Final tuner without refinement'),
                                     ('tpe-batch', 'Batch TPE (300 s)')]):
-        ax.bar(x + (i - 1) * w, t[m], w, color=SLOT[i], label=label)
-    ax.scatter(x, t['opt'], marker='_', s=120, color=INK, zorder=3, label='Landscape optimum')
+        ax.bar(x + (i - 1.5) * w, t[m], w, color=SLOT[[3, 0, 1, 2][i]], label=label)
+    ax.scatter(x, t['opt'], marker='_', s=120, color=INK, zorder=3, label='Best configuration in the grid dataset')
     ax.axhline(1.0, color=INK2, linewidth=0.8)
     ax.set_xticks(x)
     ax.set_xticklabels([k.replace('MINISWEEP', 'minisweep').replace('MINIWEATHER', 'miniWeather')

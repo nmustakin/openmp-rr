@@ -512,7 +512,8 @@ class TransferModelSearcher:
     """
 
     def __init__(self, bounds, seed, objectives, pool, target_kid, klass, table, trip_count,
-                 own_weight=20.0, n_frac=28, initial_points=None, prior_points=None, beta=10.0):
+                 own_weight=20.0, n_frac=28, initial_points=None, prior_points=None, beta=10.0,
+                 wave_teams=False):
         import numpy as np
         import pandas as pd
         from RRUtil.Search import compile_features
@@ -533,8 +534,15 @@ class TransferModelSearcher:
         fracs = np.geomspace(1 / 256, 1.0, n_frac)
         for (regs, spill), (mt, mn) in classes.items():
             for nt in range(LIMITS.warp, mt + 1, LIMITS.warp):
-                for fr in fracs:
-                    teams = max(1, int(math.ceil(trip_count * fr / nt)))
+                teams_list = [max(1, int(math.ceil(trip_count * fr / nt))) for fr in fracs]
+                if wave_teams:
+                    # Team counts that fill whole waves: k teams per SM, and k full-occupancy
+                    # waves, which the log grid of teams fractions can step over.
+                    per_sm = max(1, theoretical_blocks_per_sm(regs, nt))
+                    top = int(math.ceil(trip_count / nt))
+                    teams_list += [t for k in range(1, 17)
+                                   for t in (k * SM_COUNT, k * SM_COUNT * per_sm) if t <= top]
+                for teams in teams_list:
                     cfg = dict(MaxThreads=mt, MinTeams=mn, NumThreads=nt, NumTeams=teams)
                     f, invalid = compile_features(cfg, table, trip_count)
                     if f is None or invalid:
@@ -751,10 +759,14 @@ class RankTransferSearcher(TransferModelSearcher):
 
     def __init__(self, bounds, seed, objectives, pool, target_kid, klass, table, trip_count,
                  rgpe=False, switch=5, bags=8, min_obs=32, rounds=150, models=None,
-                 cache_dir=None):
+                 cache_dir=None, wave_teams=False, low_teams=0):
         import numpy as np
         import xgboost as xgb
-        super().__init__(bounds, seed, objectives, pool, target_kid, klass, table, trip_count)
+        super().__init__(bounds, seed, objectives, pool, target_kid, klass, table, trip_count,
+                         wave_teams=wave_teams)
+        # The first batch reserves `low_teams` slots for candidates with at most one team
+        # per SM, a region the transferred rankers rarely propose.
+        self.low_teams = low_teams
         self.xgb, self.rgpe, self.switch, self.min_obs = xgb, rgpe, switch, min_obs
         self.rng = np.random.default_rng(seed)
         # Models trained ahead (Kernel.Search starts the training in a background
@@ -900,8 +912,20 @@ class RankTransferSearcher(TransferModelSearcher):
             self.last_max_ei = float(self._ei(mu, sd, max(self.own_y)).max())
         else:
             self.last_max_ei = float('inf')
+        pick = list(idx[np.argsort(-acq[idx])[:n]])
+        if self.low_teams and not self.own_y:
+            # One best-ranked candidate per range of team counts up to one per SM (the
+            # rankers otherwise favour counts just below SM_COUNT).
+            teams = self.cand.NumTeams.values[idx]
+            edges = SM_COUNT * np.arange(self.low_teams + 1) / self.low_teams
+            low = []
+            for lo, hi in zip(edges[:-1], edges[1:]):
+                b = idx[(teams > lo) & (teams <= hi)]
+                b = [j for j in b[np.argsort(-acq[b])] if j not in pick and j not in low]
+                low += b[:1]
+            pick = pick[:n - len(low)] + low
         out = []
-        for j in idx[np.argsort(-acq[idx])[:n]]:
+        for j in pick:
             r = self.cand.iloc[j]
             out.append((config_to_point(dict(MaxThreads=r.MaxThreads, MinTeams=r.MinTeams,
                                              NumThreads=r.NumThreads, NumTeams=r.NumTeams),
@@ -1024,7 +1048,9 @@ def make_searcher(algorithm, bounds, seed, n_init, objectives, featurize=None,
                                     options['target_kid'], options['klass'],
                                     options['table'], options['trip_count'],
                                     rgpe=algorithm == 'rank-rgpe',
-                                    models=options.get('rank_models'))
+                                    models=options.get('rank_models'),
+                                    wave_teams=options.get('wave_teams', False),
+                                    low_teams=options.get('low_teams', 0))
     if algorithm == 'bo':
         return BOSearcher(bounds, seed, n_init, objectives)
     if algorithm in ('tpe', 'random', 'motpe'):
